@@ -7,6 +7,25 @@ namespace Integration.Tests;
 
 public class OrderDeliveryIntegrationTests
 {
+        [Fact]
+        public async Task CreateDeliveryTwice_ShouldReturnFalse()
+        {
+            var deliveryService = new DeliveryService(
+                NullLogger<DeliveryService>.Instance);
+
+            var request = new Contracts.Delivery.CreateDeliveryRequest
+            {
+                DeliveryId = Guid.NewGuid(),
+                CustomerId = Guid.NewGuid(),
+                Address = "ул. Тестовая, 2"
+            };
+
+            var firstResult = await deliveryService.CreateAsync(request);
+            var secondResult = await deliveryService.CreateAsync(request);
+
+            Assert.True(firstResult);
+            Assert.False(secondResult);
+        }
     [Fact]
     public async Task CreateOrder_ShouldCreateOrderAndDelivery()
     {

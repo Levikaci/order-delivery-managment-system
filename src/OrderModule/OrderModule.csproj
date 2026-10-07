@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Contracts\Contracts.csproj" />
+    <ProjectReference Include="..\DeliveryModule\DeliveryModule.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

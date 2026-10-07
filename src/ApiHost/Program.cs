@@ -1,23 +1,43 @@
+using Contracts.Delivery;
+using DeliveryModule;
+using OrderModule;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-
-builder.Services.AddControllers();
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+builder.Services.AddLogging();
+builder.Services.AddSingleton<IDeliveryService, DeliveryService>();
+builder.Services.AddSingleton<OrderService, OrderService>();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+app.MapPost("/api/orders", async (
+    OrderService orderService,
+    Guid customerId,
+    string address) =>
 {
-    app.MapOpenApi();
-}
+    var orderId = Guid.NewGuid();
 
-app.UseHttpsRedirection();
+    var created = await orderService.CreateOrderAsync(
+        orderId,
+        customerId,
+        address);
 
-app.UseAuthorization();
+    if (!created)
+    {
+        return Results.BadRequest(new
+        {
+            error = "DELIVERY_CREATION_FAILED"
+        });
+    }
 
-app.MapControllers();
+    return Results.Ok(new
+    {
+        orderId,
+        message = "Заказ успешно создан"
+    });
+});
+
+
+app.MapGet("/", () => "Order Delivery Management System");
 
 app.Run();

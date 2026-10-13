@@ -21,6 +21,14 @@ public class OrderService
         Guid customerId,
         string address)
     {
+        if (orderId == Guid.Empty ||
+            customerId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(address))
+        {
+            _logger.LogWarning("Заказ не создан: некорректные данные");
+            return false;
+        }
+
         using var scope = _logger.BeginScope(new Dictionary<string, object>
         {
             ["OrderId"] = orderId,
@@ -43,7 +51,6 @@ public class OrderService
         {
             _logger.LogWarning(
                 "Заказ не создан: не удалось создать доставку");
-
             return false;
         }
 

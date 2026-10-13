@@ -13,21 +13,18 @@ public class OrderServiceTests
         var deliveryService =
             new DeliveryService(NullLogger<DeliveryService>.Instance);
 
-        var orderService =
-            new OrderService(
-                deliveryService,
-                NullLogger<OrderService>.Instance);
-
-        var orderId = Guid.NewGuid();
-        var customerId = Guid.NewGuid();
+        var orderService = new OrderService(
+            deliveryService,
+            NullLogger<OrderService>.Instance);
 
         var result = await orderService.CreateOrderAsync(
-            orderId,
-            customerId,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
             "ул. Тестовая, 1");
 
         Assert.True(result);
     }
+
     [Fact]
     public async Task CreateOrderAsync_WithEmptyAddress_ShouldReturnFalse()
     {
@@ -42,6 +39,24 @@ public class OrderServiceTests
             Guid.NewGuid(),
             Guid.NewGuid(),
             "");
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_WithEmptyOrderId_ShouldReturnFalse()
+    {
+        var deliveryService =
+            new DeliveryService(NullLogger<DeliveryService>.Instance);
+
+        var orderService = new OrderService(
+            deliveryService,
+            NullLogger<OrderService>.Instance);
+
+        var result = await orderService.CreateOrderAsync(
+            Guid.Empty,
+            Guid.NewGuid(),
+            "ул. Тестовая, 3");
 
         Assert.False(result);
     }

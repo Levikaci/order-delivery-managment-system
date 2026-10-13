@@ -28,4 +28,21 @@ public class OrderServiceTests
 
         Assert.True(result);
     }
+    [Fact]
+    public async Task CreateOrderAsync_WithEmptyAddress_ShouldReturnFalse()
+    {
+        var deliveryService =
+            new DeliveryService(NullLogger<DeliveryService>.Instance);
+
+        var orderService = new OrderService(
+            deliveryService,
+            NullLogger<OrderService>.Instance);
+
+        var result = await orderService.CreateOrderAsync(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "");
+
+        Assert.False(result);
+    }
 }

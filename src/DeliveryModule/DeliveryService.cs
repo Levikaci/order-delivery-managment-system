@@ -15,6 +15,17 @@ public class DeliveryService : IDeliveryService
 
     public Task<bool> CreateAsync(CreateDeliveryRequest request)
     {
+        if (request == null ||
+            request.DeliveryId == Guid.Empty ||
+            request.CustomerId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(request.Address))
+        {
+            _logger.LogWarning(
+                "Создание доставки отклонено: некорректные данные");
+
+            return Task.FromResult(false);
+        }
+
         using var scope = _logger.BeginScope(new Dictionary<string, object>
         {
             ["DeliveryId"] = request.DeliveryId,
@@ -31,8 +42,7 @@ public class DeliveryService : IDeliveryService
 
         _deliveries[request.DeliveryId] = request;
 
-        _logger.LogInformation(
-            "Доставка успешно создана");
+        _logger.LogInformation("Доставка успешно создана");
 
         return Task.FromResult(true);
     }

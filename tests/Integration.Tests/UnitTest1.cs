@@ -7,25 +7,25 @@ namespace Integration.Tests;
 
 public class OrderDeliveryIntegrationTests
 {
-        [Fact]
-        public async Task CreateDeliveryTwice_ShouldReturnFalse()
+    [Fact]
+    public async Task CreateDeliveryTwice_ShouldReturnFalse()
+    {
+        var deliveryService = new DeliveryService(
+            NullLogger<DeliveryService>.Instance);
+
+        var request = new Contracts.Delivery.CreateDeliveryRequest
         {
-            var deliveryService = new DeliveryService(
-                NullLogger<DeliveryService>.Instance);
+            DeliveryId = Guid.NewGuid(),
+            CustomerId = Guid.NewGuid(),
+            Address = "ул. Тестовая, 2"
+        };
 
-            var request = new Contracts.Delivery.CreateDeliveryRequest
-            {
-                DeliveryId = Guid.NewGuid(),
-                CustomerId = Guid.NewGuid(),
-                Address = "ул. Тестовая, 2"
-            };
+        var firstResult = await deliveryService.CreateAsync(request);
+        var secondResult = await deliveryService.CreateAsync(request);
 
-            var firstResult = await deliveryService.CreateAsync(request);
-            var secondResult = await deliveryService.CreateAsync(request);
-
-            Assert.True(firstResult);
-            Assert.False(secondResult);
-        }
+        Assert.True(firstResult);
+        Assert.False(secondResult);
+    }
     [Fact]
     public async Task CreateOrder_ShouldCreateOrderAndDelivery()
     {
@@ -48,5 +48,22 @@ public class OrderDeliveryIntegrationTests
 
         // Assert
         Assert.True(result);
+    }
+    [Fact]
+    public async Task CreateDelivery_WithEmptyAddress_ShouldReturnFalse()
+    {
+        var deliveryService = new DeliveryService(
+            NullLogger<DeliveryService>.Instance);
+
+        var request = new Contracts.Delivery.CreateDeliveryRequest
+        {
+            DeliveryId = Guid.NewGuid(),
+            CustomerId = Guid.NewGuid(),
+            Address = ""
+        };
+
+        var result = await deliveryService.CreateAsync(request);
+
+        Assert.False(result);
     }
 }

@@ -44,6 +44,16 @@ SQLite, один файл (`data/delivery.db` локально, `/data/delivery.
 
 Строка подключения — `ConnectionStrings:Default`. Сбросить данные — удалить файл БД (или `docker compose down -v`).
 
+## Зависимости
+- **.NET 9 SDK / ASP.NET Core 9** — сервер и API (minimal API), раздача интерфейса.
+- **Microsoft.Data.Sqlite** — хранение данных в одном файле SQLite, отдельная СУБД не нужна.
+- **Microsoft.Extensions.Logging** — логирование.
+- **xUnit** (+ Test.Sdk, coverlet) — тесты.
+- **Inter и JetBrains Mono** — шрифты, лежат в `wwwroot/fonts`, интернет не нужен.
+- **Docker** — по желанию, для запуска без .NET.
+
+Связи между модулями и полная таблица — в [docs/dependencies.md](docs/dependencies.md).
+
 ## Запуск
 **Через Docker** (нужен только Docker):
 ```bash

@@ -62,7 +62,7 @@ fix
 ```text
 1. chore: add gitignore and editorconfig
 2. docs: add project scope and modules
-3. docs: add architecture and dependencies
+3. docs: add architecture
 4. docs: add contracts and testing strategy
 5. docs: add version control rules and ADRs
 ```

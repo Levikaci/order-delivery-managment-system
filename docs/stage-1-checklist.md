@@ -5,7 +5,6 @@
 | Назначение и границы | `project-scope.md` |
 | Модули и ответственность | `modules.md` |
 | Архитектура | `architecture.md` |
-| Зависимости | `dependencies.md` |
 | API/контракты/DTO | `contracts.md` |
 | Сборка и запуск | `README.md` |
 | Тестовая стратегия | `testing.md` |

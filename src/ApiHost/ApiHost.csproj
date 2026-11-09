@@ -7,12 +7,19 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.4" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.4" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\OrderModule\OrderModule.csproj" />
     <ProjectReference Include="..\DeliveryModule\DeliveryModule.csproj" />
+    <ProjectReference Include="..\CourierModule\CourierModule.csproj" />
+    <ProjectReference Include="..\CustomerModule\CustomerModule.csproj" />
+    <ProjectReference Include="..\Contracts\Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Contracts" />
   </ItemGroup>
 
 </Project>

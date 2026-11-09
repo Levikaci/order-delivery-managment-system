@@ -18,6 +18,21 @@
 | PATCH | `/api/deliveries/{id}/status` | Изменение статуса |
 | GET | `/api/couriers/available` | Свободные курьеры |
 | GET | `/api/customers/{id}` | Данные клиента |
+| POST | `/api/auth/login` | Вход, возвращает Bearer-токен |
+| POST | `/api/deliveries/{id}/confirm` | Подтверждение получения клиентом |
+| PUT | `/api/orders/{id}` | Редактирование заказа (Created/Assigned) |
+| PATCH | `/api/couriers/{id}/state` | Состояние курьера |
+| GET/POST/PUT/DELETE | `/api/products`, `/api/customers/{id}/addresses` | Товары и адреса |
+
+Все запросы, кроме `/api/health` и `/api/auth/login`, требуют заголовок `Authorization: Bearer <token>`.
+
+Формат ошибки:
+
+```json
+{ "success": false, "errorCode": "FAILURE_REASON_REQUIRED", "error": "...", "message": "Укажите причину" }
+```
+
+Для заказа можно передать либо `addressId` (сохранённый адрес), либо `deliveryAddress` (+ `saveAddress`), а также `comment`. Статусы доставки: Created, Assigned, Accepted, InTransit, Delivered, Failed, Cancelled; заказа: Created, Confirmed, Preparing, InDelivery, Delivered, Cancelled.
 
 ## CreateOrderRequest
 

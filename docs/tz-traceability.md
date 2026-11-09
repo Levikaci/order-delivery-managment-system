@@ -2,7 +2,7 @@
 
 | Требование ТЗ | Реализация |
 |---|---|
-| Веб-приложение на ASP.NET Core | `src/ApiHost`, minimal API + `wwwroot/index.html` |
+| Серверная часть на ASP.NET Core, клиентское приложение | `src/ApiHost` (REST API), `src/WpfClient` (WPF-клиент) |
 | Модули Order, Delivery, Courier, Customer | `src/OrderModule`, `DeliveryModule`, `CourierModule`, `CustomerModule` (`*Rules.cs`), общие DTO и enum в `src/Contracts` |
 | Создание заказа с товарами и адресом | `POST /api/orders`, таблицы `orders`, `order_items`, `products` |
 | Сохранённые адреса клиента | `customer_addresses`, `/api/customers/{id}/addresses` |

@@ -1,8 +1,6 @@
 # Order Delivery Management System
 
-Веб-система управления доставкой заказов на ASP.NET Core 9 и SQLite. Клиент оформляет заказ, оператор назначает курьера и контролирует выполнение, курьер ведёт доставку по статусам. Все изменения сохраняются в истории.
-
-![Оператор](docs/img/ui-operator.png)
+Клиент-серверная система управления доставкой заказов: сервер на ASP.NET Core 9 и SQLite, клиентское приложение на WPF. Клиент оформляет заказ, оператор назначает курьера и контролирует выполнение, курьер ведёт доставку по статусам. Все изменения сохраняются в истории.
 
 ## Содержание
 - [Возможности](#что-умеет)
@@ -33,7 +31,7 @@
 ![Статусы](docs/img/statuses.png)
 
 ## Как устроено
-- `src/ApiHost` — ASP.NET Core 9 minimal API, SQLite-хранилище (`Store.cs`), авторизация (`Auth.cs`), статический UI (`wwwroot/index.html`, без фреймворков).
+- `src/ApiHost` — ASP.NET Core 9 minimal API, SQLite-хранилище (`Store.cs`), авторизация (`Auth.cs`), .
 - `src/Contracts` — DTO и перечисления; `OrderModule`, `DeliveryModule`, `CourierModule`, `CustomerModule` — бизнес-правила каждого модуля (`*Rules.cs`), общение через контракты.
 - `tests/` — 46 тестов (правила модулей и сценарии на реальной SQLite).
 - `docs/` — этапы курсового, ADR, архитектура, тесты.
@@ -58,7 +56,7 @@ SQLite, один файл (`data/delivery.db` локально, `/data/delivery.
 - **Microsoft.Data.Sqlite** — хранение данных в одном файле SQLite, отдельная СУБД не нужна.
 - **Microsoft.Extensions.Logging** — логирование.
 - **xUnit** (+ Test.Sdk, coverlet) — тесты.
-- **Inter и JetBrains Mono** — шрифты, лежат в `wwwroot/fonts`, интернет не нужен.
+- **WPF (.NET 9, Windows)** — клиентское приложение; сторонних пакетов не использует.
 - **Docker** — по желанию, для запуска без .NET.
 
 Связи между модулями и полная таблица — в [docs/dependencies.md](docs/dependencies.md).
@@ -75,9 +73,16 @@ docker compose up --build
 ```bash
 dotnet run --project src/ApiHost --no-launch-profile --urls http://localhost:8080
 ```
-Либо `run.bat` (Windows) / `./run.sh` (Linux, macOS). В Visual Studio стартовый проект — `ApiHost`.
+Либо `run.bat` (Windows) / `./run.sh` (Linux, macOS). В Visual Studio: Multiple startup projects — `ApiHost` (сервер) и `WpfClient` (клиент).
 
 Приложение доступно на http://localhost:8080, проверка работоспособности — `GET /api/health`.
+
+### WPF-клиент
+Сначала запустите сервер, затем (Windows):
+```bash
+dotnet run --project src/WpfClient
+```
+или `run-client.bat`. В окне входа адрес сервера по умолчанию `http://localhost:8080`; если сервер запущен в Docker, он тот же.
 
 ### Тесты
 ```bash
@@ -85,21 +90,13 @@ dotnet test OrderDeliveryManagementSystem.sln
 ```
 
 ## Интерфейс
-Тёмная диспетчерская консоль: компактные таблицы, акцентный синий, шрифты Inter и JetBrains Mono лежат локально (`wwwroot/fonts`, лицензии OFL рядом). На телефоне интерфейс перестраивается в мобильное приложение.
+Клиентское приложение — WPF (`src/WpfClient`, .NET 9, Windows), тёмная тема. Общается с сервером по REST API с Bearer-токеном. Окно входа принимает адрес сервера, логин и пароль; дальше интерфейс зависит от роли:
 
-![Вход](docs/img/ui-login.png)
+- **Оператор**: диспетчерская (все заказы, поиск, назначение курьера вручную или автоматически, смена статуса, подтверждение получения) и справочники клиентов, курьеров и товаров.
+- **Клиент**: «Мои заказы», создание заказа из товаров с количеством, выбор или сохранение адреса, изменение и отмена заказа до принятия курьером, подтверждение получения.
+- **Курьер**: маршрутный лист, кнопки «Принять», «В пути», «Доставлено», «Не удалось» (с причиной), переход на линию и обратно.
 
-![Оператор](docs/img/ui-operator.png)
-
-![Клиент](docs/img/ui-client.png)
-
-![Форма заказа](docs/img/ui-order-form.png)
-
-![Курьер](docs/img/ui-courier.png)
-
-![Карточка заказа](docs/img/ui-drawer.png)
-
-![Справочники](docs/img/ui-admin.png)
+Список обновляется автоматически каждые 8 секунд, справа показана карточка заказа с составом, временем и историей статусов.
 
 ## API
 Все endpoints, кроме `health` и `login`, требуют `Authorization: Bearer <token>` и проверяют роль.

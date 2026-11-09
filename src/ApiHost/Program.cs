@@ -2,30 +2,43 @@ using System.Text.Json.Serialization;
 using ApiHost;
 
 var builder = WebApplication.CreateBuilder(args);
+// Порт по умолчанию 8080 (как в клиенте, Docker и README), если адрес не задан --urls / ASPNETCORE_URLS / launchSettings.
+if (string.IsNullOrEmpty(builder.Configuration["urls"]) && string.IsNullOrEmpty(builder.Configuration["http_ports"]))
+    builder.WebHost.UseUrls("http://localhost:8080");
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddSingleton<Store>();
 builder.Services.AddSingleton<AuthService>();
 
 var app = builder.Build();
-app.UseDefaultFiles();
-app.UseStaticFiles();
 
 // Единый формат ошибок (ErrorResponse из ТЗ): { success:false, errorCode, message }.
 var messages = new Dictionary<string, string>
 {
-    ["UNAUTHORIZED"] = "Требуется вход в систему", ["FORBIDDEN"] = "Недостаточно прав для этого действия",
-    ["INVALID_CREDENTIALS"] = "Неверный логин или пароль", ["INVALID_REQUEST"] = "Некорректный запрос",
-    ["CUSTOMER_NOT_FOUND"] = "Клиент не найден", ["COURIER_NOT_FOUND"] = "Курьер не найден",
-    ["ORDER_NOT_FOUND"] = "Заказ не найден", ["DELIVERY_NOT_FOUND"] = "Доставка не найдена",
-    ["ADDRESS_NOT_FOUND"] = "Адрес не найден", ["PRODUCT_NOT_FOUND"] = "Товар не найден",
-    ["INVALID_ADDRESS"] = "Укажите город, улицу и дом", ["INVALID_NAME"] = "Укажите имя",
-    ["INVALID_PRODUCT"] = "Укажите название и цену товара", ["EMPTY_ORDER"] = "Добавьте в заказ хотя бы один товар",
-    ["INVALID_QUANTITY"] = "Количество должно быть от 1 до 99", ["LOGIN_TAKEN"] = "Такой логин уже занят",
-    ["CUSTOMER_HAS_ORDERS"] = "У клиента есть заказы, удалить нельзя", ["COURIER_HAS_ORDERS"] = "У курьера есть доставки, удалить нельзя",
-    ["COURIER_NOT_AVAILABLE"] = "Нет доступных курьеров", ["COURIER_BUSY"] = "Курьер сейчас занят доставкой",
+    ["UNAUTHORIZED"] = "Требуется вход в систему",
+    ["FORBIDDEN"] = "Недостаточно прав для этого действия",
+    ["INVALID_CREDENTIALS"] = "Неверный логин или пароль",
+    ["INVALID_REQUEST"] = "Некорректный запрос",
+    ["CUSTOMER_NOT_FOUND"] = "Клиент не найден",
+    ["COURIER_NOT_FOUND"] = "Курьер не найден",
+    ["ORDER_NOT_FOUND"] = "Заказ не найден",
+    ["DELIVERY_NOT_FOUND"] = "Доставка не найдена",
+    ["ADDRESS_NOT_FOUND"] = "Адрес не найден",
+    ["PRODUCT_NOT_FOUND"] = "Товар не найден",
+    ["INVALID_ADDRESS"] = "Укажите город, улицу и дом",
+    ["INVALID_NAME"] = "Укажите имя",
+    ["INVALID_PRODUCT"] = "Укажите название и цену товара",
+    ["EMPTY_ORDER"] = "Добавьте в заказ хотя бы один товар",
+    ["INVALID_QUANTITY"] = "Количество должно быть от 1 до 99",
+    ["LOGIN_TAKEN"] = "Такой логин уже занят",
+    ["CUSTOMER_HAS_ORDERS"] = "У клиента есть заказы, удалить нельзя",
+    ["COURIER_HAS_ORDERS"] = "У курьера есть доставки, удалить нельзя",
+    ["COURIER_NOT_AVAILABLE"] = "Нет доступных курьеров",
+    ["COURIER_BUSY"] = "Курьер сейчас занят доставкой",
     ["INVALID_COURIER_STATE"] = "Состояние «Занят» устанавливается системой при назначении",
-    ["DELIVERY_ALREADY_ASSIGNED"] = "Курьер уже назначен", ["DELIVERY_ALREADY_COMPLETED"] = "Доставка уже завершена",
-    ["DELIVERY_ALREADY_EXISTS"] = "Доставка для заказа уже существует", ["INVALID_STATUS_TRANSITION"] = "Недопустимый переход статуса",
+    ["DELIVERY_ALREADY_ASSIGNED"] = "Курьер уже назначен",
+    ["DELIVERY_ALREADY_COMPLETED"] = "Доставка уже завершена",
+    ["DELIVERY_ALREADY_EXISTS"] = "Доставка для заказа уже существует",
+    ["INVALID_STATUS_TRANSITION"] = "Недопустимый переход статуса",
     ["UNAUTHORIZED_STATUS_CHANGE"] = "Вы не можете изменить этот статус (отмена возможна только до передачи в доставку)",
     ["FAILURE_REASON_REQUIRED"] = "Укажите причину, по которой доставка не выполнена",
     ["ORDER_NOT_EDITABLE"] = "Заказ нельзя изменить после принятия курьером",
@@ -127,7 +140,11 @@ Roles(api.MapPost("/orders", (HttpContext h, Store s, CreateOrderRequest r) =>
     var (d, assigned, e) = s.CreateOrder(r);
     return d is null ? Err(e!) : Results.Ok(new
     {
-        orderId = d.OrderId, status = d.Status, orderStatus = d.OrderStatus, deliveryId = d.DeliveryId, courierId = d.CourierId,
+        orderId = d.OrderId,
+        status = d.Status,
+        orderStatus = d.OrderStatus,
+        deliveryId = d.DeliveryId,
+        courierId = d.CourierId,
         courierAssigned = assigned,
         message = assigned ? "Заказ создан, курьер назначен" : "Заказ создан, но свободных курьеров нет. Назначение можно повторить: POST /api/deliveries/" + d.DeliveryId + "/assign"
     });

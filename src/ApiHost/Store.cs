@@ -185,19 +185,25 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
     public string? UpdateCustomer(Guid id, NewPerson p)
     {
         if (CustomerRules.ValidateName(p.Name) is { } e) return e;
-        lock (_lock) { using var c = Open();
-            return Cmd(c, "UPDATE customers SET name=$n,phone=$p WHERE id=$i", ("$n", p.Name.Trim()), ("$p", p.Phone ?? ""), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "CUSTOMER_NOT_FOUND" : null; }
+        lock (_lock)
+        {
+            using var c = Open();
+            return Cmd(c, "UPDATE customers SET name=$n,phone=$p WHERE id=$i", ("$n", p.Name.Trim()), ("$p", p.Phone ?? ""), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "CUSTOMER_NOT_FOUND" : null;
+        }
     }
 
     public string? DeleteCustomer(Guid id)
     {
-        lock (_lock) { using var c = Open();
+        lock (_lock)
+        {
+            using var c = Open();
             if (Count(c, "SELECT COUNT(*) FROM orders WHERE customer_id=$i", ("$i", id.ToString())) > 0) return "CUSTOMER_HAS_ORDERS";
             using var tx = c.BeginTransaction();
             Cmd(c, "DELETE FROM users WHERE ref_id=$i AND role='client'", ("$i", id.ToString())).ExecuteNonQuery();
             var n = Cmd(c, "DELETE FROM customers WHERE id=$i", ("$i", id.ToString())).ExecuteNonQuery();
             tx.Commit();
-            return n == 0 ? "CUSTOMER_NOT_FOUND" : null; }
+            return n == 0 ? "CUSTOMER_NOT_FOUND" : null;
+        }
     }
 
     public List<Customer> Customers() { using var c = Open(); return Customers(c); }
@@ -235,25 +241,34 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
     public (SavedAddress? a, string? error) AddAddress(Guid customerId, AddressRequest r)
     {
         if (CustomerRules.ValidateAddress(r.City, r.Street, r.House) is { } e) return (null, e);
-        lock (_lock) { using var c = Open();
+        lock (_lock)
+        {
+            using var c = Open();
             if (Count(c, "SELECT COUNT(*) FROM customers WHERE id=$i", ("$i", customerId.ToString())) == 0) return (null, "CUSTOMER_NOT_FOUND");
             var id = AddAddr(c, customerId, r.Label?.Trim() ?? "", r.City, r.Street, r.House, r.Apartment);
-            return (Addresses(c, customerId).First(a => a.Id == id), null); }
+            return (Addresses(c, customerId).First(a => a.Id == id), null);
+        }
     }
 
     public string? UpdateAddress(Guid id, AddressRequest r)
     {
         if (CustomerRules.ValidateAddress(r.City, r.Street, r.House) is { } e) return e;
-        lock (_lock) { using var c = Open();
+        lock (_lock)
+        {
+            using var c = Open();
             return Cmd(c, "UPDATE customer_addresses SET label=$l,city=$c,street=$s,house=$h,apartment=$a WHERE id=$i",
                 ("$l", r.Label?.Trim() ?? ""), ("$c", r.City.Trim()), ("$s", r.Street.Trim()), ("$h", r.House.Trim()),
-                ("$a", string.IsNullOrWhiteSpace(r.Apartment) ? null : r.Apartment.Trim()), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "ADDRESS_NOT_FOUND" : null; }
+                ("$a", string.IsNullOrWhiteSpace(r.Apartment) ? null : r.Apartment.Trim()), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "ADDRESS_NOT_FOUND" : null;
+        }
     }
 
     public string? DeleteAddress(Guid id)
     {
-        lock (_lock) { using var c = Open();
-            return Cmd(c, "DELETE FROM customer_addresses WHERE id=$i", ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "ADDRESS_NOT_FOUND" : null; }
+        lock (_lock)
+        {
+            using var c = Open();
+            return Cmd(c, "DELETE FROM customer_addresses WHERE id=$i", ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "ADDRESS_NOT_FOUND" : null;
+        }
     }
 
     // ---------- курьеры ----------
@@ -283,19 +298,25 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
     public string? UpdateCourier(Guid id, NewPerson p)
     {
         if (CustomerRules.ValidateName(p.Name) is { } e) return e;
-        lock (_lock) { using var c = Open();
-            return Cmd(c, "UPDATE couriers SET name=$n,phone=$p WHERE id=$i", ("$n", p.Name.Trim()), ("$p", p.Phone ?? ""), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "COURIER_NOT_FOUND" : null; }
+        lock (_lock)
+        {
+            using var c = Open();
+            return Cmd(c, "UPDATE couriers SET name=$n,phone=$p WHERE id=$i", ("$n", p.Name.Trim()), ("$p", p.Phone ?? ""), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "COURIER_NOT_FOUND" : null;
+        }
     }
 
     public string? DeleteCourier(Guid id)
     {
-        lock (_lock) { using var c = Open();
+        lock (_lock)
+        {
+            using var c = Open();
             if (Count(c, "SELECT COUNT(*) FROM deliveries WHERE courier_id=$i", ("$i", id.ToString())) > 0) return "COURIER_HAS_ORDERS";
             using var tx = c.BeginTransaction();
             Cmd(c, "DELETE FROM users WHERE ref_id=$i AND role='courier'", ("$i", id.ToString())).ExecuteNonQuery();
             var n = Cmd(c, "DELETE FROM couriers WHERE id=$i", ("$i", id.ToString())).ExecuteNonQuery();
             tx.Commit();
-            return n == 0 ? "COURIER_NOT_FOUND" : null; }
+            return n == 0 ? "COURIER_NOT_FOUND" : null;
+        }
     }
 
     public List<Courier> Couriers(bool onlyAvailable = false) { using var c = Open(); return Couriers(c, onlyAvailable); }
@@ -347,14 +368,20 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
     public string? UpdateProduct(Guid id, ProductRequest r)
     {
         if (string.IsNullOrWhiteSpace(r.Name) || r.Price < 0 || r.Price > 1_000_000) return "INVALID_PRODUCT";
-        lock (_lock) { using var c = Open();
-            return Cmd(c, "UPDATE products SET name=$n,price=$p WHERE id=$i", ("$n", r.Name.Trim()), ("$p", (double)r.Price), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "PRODUCT_NOT_FOUND" : null; }
+        lock (_lock)
+        {
+            using var c = Open();
+            return Cmd(c, "UPDATE products SET name=$n,price=$p WHERE id=$i", ("$n", r.Name.Trim()), ("$p", (double)r.Price), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "PRODUCT_NOT_FOUND" : null;
+        }
     }
 
     public string? DeleteProduct(Guid id)
     {
-        lock (_lock) { using var c = Open();
-            return Cmd(c, "DELETE FROM products WHERE id=$i", ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "PRODUCT_NOT_FOUND" : null; }
+        lock (_lock)
+        {
+            using var c = Open();
+            return Cmd(c, "DELETE FROM products WHERE id=$i", ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "PRODUCT_NOT_FOUND" : null;
+        }
     }
 
     // ---------- чтение заказов и доставок ----------
@@ -387,12 +414,19 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
             while (r.Read())
                 list.Add(new Delivery
                 {
-                    DeliveryId = Guid.Parse(r.GetString(0)), OrderId = Guid.Parse(r.GetString(1)), CustomerId = Guid.Parse(r.GetString(2)),
+                    DeliveryId = Guid.Parse(r.GetString(0)),
+                    OrderId = Guid.Parse(r.GetString(1)),
+                    CustomerId = Guid.Parse(r.GetString(2)),
                     CourierId = r.IsDBNull(3) ? null : Guid.Parse(r.GetString(3)),
-                    Address = r.GetString(4), Comment = Str(r, 5),
-                    Status = Enum.Parse<DeliveryStatus>(r.GetString(6)), OrderStatus = Enum.Parse<OrderStatus>(r.GetString(7)),
-                    CreatedAt = Dt(r.GetString(8)), StartedAt = DtN(r, 9), FinishedAt = DtN(r, 10),
-                    FailureReason = Str(r, 11), ConfirmedAt = DtN(r, 12)
+                    Address = r.GetString(4),
+                    Comment = Str(r, 5),
+                    Status = Enum.Parse<DeliveryStatus>(r.GetString(6)),
+                    OrderStatus = Enum.Parse<OrderStatus>(r.GetString(7)),
+                    CreatedAt = Dt(r.GetString(8)),
+                    StartedAt = DtN(r, 9),
+                    FinishedAt = DtN(r, 10),
+                    FailureReason = Str(r, 11),
+                    ConfirmedAt = DtN(r, 12)
                 });
         foreach (var d in list)
         {
@@ -661,7 +695,11 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
         }
         return new
         {
-            customers, couriers, addresses, products = Products(c), deliveries,
+            customers,
+            couriers,
+            addresses,
+            products = Products(c),
+            deliveries,
             stats = deliveries.GroupBy(x => x.Status.ToString()).ToDictionary(g => g.Key, g => g.Count())
         };
     }

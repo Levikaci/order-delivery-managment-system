@@ -5,17 +5,29 @@ public static class Texts
 {
     public static readonly Dictionary<string, string> Delivery = new()
     {
-        ["Created"] = "Создана", ["Assigned"] = "Назначена", ["Accepted"] = "Принята курьером",
-        ["InTransit"] = "В пути", ["Delivered"] = "Доставлена", ["Failed"] = "Не удалась", ["Cancelled"] = "Отменена",
+        ["Created"] = "Создана",
+        ["Assigned"] = "Назначена",
+        ["Accepted"] = "Принята курьером",
+        ["InTransit"] = "В пути",
+        ["Delivered"] = "Доставлена",
+        ["Failed"] = "Не удалась",
+        ["Cancelled"] = "Отменена",
     };
     public static readonly Dictionary<string, string> Order = new()
     {
-        ["Created"] = "Создан", ["Confirmed"] = "Подтверждён", ["Preparing"] = "Готовится",
-        ["InDelivery"] = "В доставке", ["Delivered"] = "Доставлен", ["Cancelled"] = "Отменён",
+        ["Created"] = "Создан",
+        ["Confirmed"] = "Подтверждён",
+        ["Preparing"] = "Готовится",
+        ["InDelivery"] = "В доставке",
+        ["Delivered"] = "Доставлен",
+        ["Cancelled"] = "Отменён",
     };
     public static readonly Dictionary<string, string> Courier = new()
     {
-        ["Available"] = "Свободен", ["Busy"] = "Занят", ["Offline"] = "Не на линии", ["Blocked"] = "Заблокирован",
+        ["Available"] = "Свободен",
+        ["Busy"] = "Занят",
+        ["Offline"] = "Не на линии",
+        ["Blocked"] = "Заблокирован",
     };
     public static readonly Dictionary<string, string[]> Next = new()
     {

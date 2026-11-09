@@ -13,7 +13,7 @@ public partial class PickDialog : Window
     public PickDialog(Window owner, string title, string prompt, IEnumerable<(string value, string label)> items, bool needText = false)
     {
         InitializeComponent();
-        Owner = owner; Title = title; Prompt.Text = prompt;
+        Owner = owner; Title = title; Head.Text = title; Prompt.Text = prompt;
         _items = items.ToList(); _needText = needText;
         foreach (var i in _items) List.Items.Add(i.label);
         if (_items.Count > 0) List.SelectedIndex = 0; else List.Visibility = Visibility.Collapsed;

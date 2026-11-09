@@ -5,7 +5,7 @@ namespace WpfClient;
 
 public partial class LoginWindow : Window
 {
-    public LoginWindow() { InitializeComponent(); Login.Focus(); }
+    public LoginWindow() { InitializeComponent(); Loaded += (_, _) => Login.Focus(); }
 
     private void Demo_Click(object sender, RoutedEventArgs e)
     {

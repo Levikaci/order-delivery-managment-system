@@ -27,7 +27,7 @@ public partial class OrderDialog : Window
     {
         InitializeComponent();
         Owner = owner; CustomerId = customerId;
-        Title = existing is null ? "Новый заказ" : "Изменение заказа";
+        Title = existing is null ? "Новый заказ" : "Изменение заказа"; Head.Text = Title;
         if (existing is not null) Ok.Content = "Сохранить";
         foreach (var p in products)
         {
@@ -35,7 +35,7 @@ public partial class OrderDialog : Window
             var q = existing?["items"]?.AsArray().FirstOrDefault(i => i!["productId"]!.GetValue<string>() == id.ToString())?["quantity"]?.GetValue<int>() ?? 0;
             _rows.Add(new ProductRow { Id = id, Name = p["name"]!.GetValue<string>(), Price = p["price"]!.GetValue<decimal>(), Quantity = q });
         }
-        Grid.ItemsSource = _rows;
+        Items.ItemsSource = _rows;
         _addresses = addresses.Select(a => a!).ToList();
         foreach (var a in _addresses) Saved.Items.Add(a["text"]?.ToString() ?? $"{a["city"]}, {a["street"]}, {a["house"]}");
         if (_addresses.Count > 0 && existing is null) Saved.SelectedIndex = 0;
@@ -43,8 +43,9 @@ public partial class OrderDialog : Window
         UpdateTotal();
     }
 
-    private void UpdateTotal() => Total.Text = "Итого: " + _rows.Sum(r => r.Price * r.Quantity).ToString("0.##") + " ₽";
-    private void Grid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e) => Dispatcher.BeginInvoke(UpdateTotal, System.Windows.Threading.DispatcherPriority.Background);
+    private void UpdateTotal() => Total.Text = _rows.Sum(r => r.Price * r.Quantity).ToString("#,0.##") + " ₽";
+    private void Inc_Click(object sender, RoutedEventArgs e) { ((ProductRow)((Button)sender).DataContext).Quantity++; UpdateTotal(); }
+    private void Dec_Click(object sender, RoutedEventArgs e) { ((ProductRow)((Button)sender).DataContext).Quantity--; UpdateTotal(); }
     private void NewAddr_Click(object sender, RoutedEventArgs e) { Saved.SelectedIndex = -1; City.Focus(); }
 
     private async void DelAddr_Click(object sender, RoutedEventArgs e)
@@ -55,7 +56,7 @@ public partial class OrderDialog : Window
             await App.Api.DeleteAsync("api/addresses/" + _addresses[Saved.SelectedIndex]["id"]);
             _addresses.RemoveAt(Saved.SelectedIndex); Saved.Items.RemoveAt(Saved.SelectedIndex);
         }
-        catch (ApiException ex) { MessageBox.Show(this, ex.Message); }
+        catch (ApiException ex) { MsgDialog.Info(this, ex.Message); }
     }
 
     /// <summary>Тело запроса POST /api/orders или PUT /api/orders/{id}.</summary>
@@ -64,12 +65,12 @@ public partial class OrderDialog : Window
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
         var items = _rows.Where(r => r.Quantity > 0).Select(r => new { productId = r.Id, quantity = r.Quantity }).ToList();
-        if (items.Count == 0) { MessageBox.Show(this, "Добавьте в заказ хотя бы один товар"); return; }
+        if (items.Count == 0) { MsgDialog.Info(this, "Добавьте в заказ хотя бы один товар"); return; }
         var body = new Dictionary<string, object?> { ["customerId"] = CustomerId, ["items"] = items, ["comment"] = Comment.Text.Trim() };
         if (Saved.SelectedIndex >= 0) body["addressId"] = Guid.Parse(_addresses[Saved.SelectedIndex]["id"]!.GetValue<string>());
         else
         {
-            if (City.Text.Trim() == "" || Street.Text.Trim() == "" || House.Text.Trim() == "") { MessageBox.Show(this, "Укажите город, улицу и дом"); return; }
+            if (City.Text.Trim() == "" || Street.Text.Trim() == "" || House.Text.Trim() == "") { MsgDialog.Info(this, "Укажите город, улицу и дом"); return; }
             body["deliveryAddress"] = new { city = City.Text.Trim(), street = Street.Text.Trim(), house = House.Text.Trim(), apartment = Apt.Text.Trim() };
             body["saveAddress"] = Save.IsChecked == true;
         }

@@ -1,21 +1,22 @@
 <Window x:Class="WpfClient.PersonDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="380" SizeToContent="Height" WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False">
-    <StackPanel Margin="20">
-        <Label x:Name="L1" Content="Имя" Padding="0,0,0,4"/>
+        Style="{StaticResource Dlg}" WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Width="400" SizeToContent="Height" ResizeMode="NoResize">
+    <StackPanel Margin="24,20,24,20">
+        <TextBlock x:Name="Head" FontSize="15" FontWeight="SemiBold"/>
+        <TextBlock x:Name="L1" Text="ИМЯ" Style="{StaticResource FieldLabel}" Margin="0,18,0,6"/>
         <TextBox x:Name="F1"/>
-        <Label x:Name="L2" Content="Телефон" Padding="0,10,0,4"/>
+        <TextBlock x:Name="L2" Text="ТЕЛЕФОН" Style="{StaticResource FieldLabel}"/>
         <TextBox x:Name="F2"/>
         <StackPanel x:Name="Creds">
-            <Label Content="Логин (необязательно)" Padding="0,10,0,4"/>
+            <TextBlock Text="ЛОГИН (НЕОБЯЗАТЕЛЬНО)" Style="{StaticResource FieldLabel}"/>
             <TextBox x:Name="F3"/>
-            <Label Content="Пароль (пусто — сгенерировать)" Padding="0,10,0,4"/>
+            <TextBlock Text="ПАРОЛЬ (ПУСТО — СГЕНЕРИРОВАТЬ)" Style="{StaticResource FieldLabel}"/>
             <TextBox x:Name="F4"/>
         </StackPanel>
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,24,0,0">
             <Button Content="Отмена" IsCancel="True"/>
-            <Button Content="Сохранить" Style="{StaticResource Primary}" Margin="0" Click="Ok_Click" IsDefault="True"/>
+            <Button Content="Сохранить" Style="{StaticResource Primary}" Margin="0" Click="Ok_Click" IsDefault="True" MinWidth="90"/>
         </StackPanel>
     </StackPanel>
 </Window>

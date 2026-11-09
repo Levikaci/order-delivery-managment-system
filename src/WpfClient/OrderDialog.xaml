@@ -1,44 +1,73 @@
 <Window x:Class="WpfClient.OrderDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="880" Height="600" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
-    <Grid Margin="20">
-        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="20"/><ColumnDefinition Width="340"/></Grid.ColumnDefinitions>
-        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="Товары (укажите количество)" Style="{StaticResource MutedText}" Margin="0,0,0,8"/>
-            <DataGrid x:Name="Grid" IsReadOnly="False" CellEditEnding="Grid_CellEditEnding">
-                <DataGrid.Columns>
-                    <DataGridTextColumn Header="Товар" Binding="{Binding Name}" IsReadOnly="True" Width="*"/>
-                    <DataGridTextColumn Header="Цена, ₽" Binding="{Binding PriceText}" IsReadOnly="True" Width="90"/>
-                    <DataGridTextColumn Header="Кол-во" Binding="{Binding Quantity, UpdateSourceTrigger=LostFocus}" Width="80"/>
-                </DataGrid.Columns>
-            </DataGrid>
-        </DockPanel>
-        <StackPanel Grid.Column="2">
-            <TextBlock Text="Адрес доставки" Style="{StaticResource MutedText}" Margin="0,0,0,8"/>
-            <ListBox x:Name="Saved" Height="110"/>
-            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                <Button Content="Новый адрес" Click="NewAddr_Click"/>
-                <Button Content="Удалить сохранённый" Click="DelAddr_Click"/>
+        Style="{StaticResource Dlg}" WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Width="900" Height="640" MinHeight="560">
+    <Grid>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Border Padding="24,18" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+            <StackPanel>
+                <TextBlock x:Name="Head" FontSize="17" FontWeight="SemiBold"/>
+                <TextBlock Text="Выберите товары и укажите адрес доставки" Style="{StaticResource MutedText}" Margin="0,3,0,0"/>
             </StackPanel>
-            <Label Content="Город" Padding="0,8,0,3"/><TextBox x:Name="City"/>
-            <Label Content="Улица" Padding="0,6,0,3"/><TextBox x:Name="Street"/>
-            <Grid Margin="0,6,0,0">
-                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition/></Grid.ColumnDefinitions>
-                <StackPanel><Label Content="Дом" Padding="0,0,0,3"/><TextBox x:Name="House"/></StackPanel>
-                <StackPanel Grid.Column="2"><Label Content="Квартира" Padding="0,0,0,3"/><TextBox x:Name="Apt"/></StackPanel>
-            </Grid>
-            <CheckBox x:Name="Save" Content="Сохранить адрес" Margin="0,8,0,0"/>
-            <TextBlock Text="Комментарий" Style="{StaticResource MutedText}" Margin="0,14,0,6"/>
-            <TextBox x:Name="Comment" Height="70" TextWrapping="Wrap" AcceptsReturn="True"/>
-        </StackPanel>
-        <DockPanel Grid.Row="1" Grid.ColumnSpan="3" Margin="0,16,0,0">
-            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-                <Button Content="Отмена" IsCancel="True"/>
-                <Button x:Name="Ok" Content="Создать заказ" Style="{StaticResource Primary}" Margin="0" Click="Ok_Click"/>
-            </StackPanel>
-            <TextBlock x:Name="Total" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
-        </DockPanel>
+        </Border>
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="1"/><ColumnDefinition Width="340"/></Grid.ColumnDefinitions>
+            <DockPanel Margin="24,16,16,16">
+                <TextBlock DockPanel.Dock="Top" Text="ТОВАРЫ" Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="Items">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="0,9">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="80"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" FontWeight="Medium"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding PriceText}" Style="{StaticResource MutedText}" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,16,0"/>
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                            <Button Content="−" Click="Dec_Click" Style="{StaticResource Compact}" Width="28" Margin="0"/>
+                                            <TextBlock Text="{Binding Quantity}" Width="34" TextAlignment="Center" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                                            <Button Content="+" Click="Inc_Click" Style="{StaticResource Compact}" Width="28" Margin="0"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </DockPanel>
+            <Border Grid.Column="1" Background="{StaticResource Line}"/>
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" Background="{StaticResource Bg}">
+                <StackPanel Margin="20,16,20,16">
+                    <TextBlock Text="СОХРАНЁННЫЕ АДРЕСА" Style="{StaticResource Caption}" Margin="0,0,0,8"/>
+                    <ListBox x:Name="Saved" Height="104"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Новый адрес" Click="NewAddr_Click" Style="{StaticResource Compact}"/>
+                        <Button Content="Удалить" Click="DelAddr_Click" Style="{StaticResource Compact}"/>
+                    </StackPanel>
+                    <TextBlock Text="ГОРОД" Style="{StaticResource FieldLabel}"/><TextBox x:Name="City"/>
+                    <TextBlock Text="УЛИЦА" Style="{StaticResource FieldLabel}"/><TextBox x:Name="Street"/>
+                    <Grid Margin="0,0,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                        <StackPanel><TextBlock Text="ДОМ" Style="{StaticResource FieldLabel}"/><TextBox x:Name="House"/></StackPanel>
+                        <StackPanel Grid.Column="2"><TextBlock Text="КВАРТИРА" Style="{StaticResource FieldLabel}"/><TextBox x:Name="Apt"/></StackPanel>
+                    </Grid>
+                    <CheckBox x:Name="Save" Content="Сохранить адрес" Margin="0,12,0,0"/>
+                    <TextBlock Text="КОММЕНТАРИЙ" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="Comment" Height="66" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+        <Border Grid.Row="2" Padding="24,14" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                    <Button Content="Отмена" IsCancel="True"/>
+                    <Button x:Name="Ok" Content="Создать заказ" Style="{StaticResource Primary}" Margin="0" Click="Ok_Click" MinWidth="120"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="ИТОГО" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <TextBlock x:Name="Total" FontSize="17" FontWeight="SemiBold"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
     </Grid>
 </Window>

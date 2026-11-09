@@ -15,12 +15,18 @@ public class ApiException : Exception
 /// <summary>Клиент REST API сервера ApiHost: Bearer-токен, JSON, единый формат ошибок.</summary>
 public class Api
 {
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    private HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
     public string? Role { get; private set; }
     public Guid? RefId { get; private set; }
     public string UserName { get; private set; } = "";
 
-    public void SetServer(string url) => _http.BaseAddress = new Uri(url.TrimEnd('/') + "/");
+    public void SetServer(string url)
+    {
+        // HttpClient нельзя менять после первого запроса (повторный вход) — создаём заново.
+        _http.Dispose();
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15), BaseAddress = new Uri(url.TrimEnd('/') + "/") };
+        Role = null; RefId = null; UserName = "";
+    }
 
     public async Task LoginAsync(string login, string password)
     {

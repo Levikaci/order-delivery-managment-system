@@ -1,8 +1,17 @@
 # Order Delivery Management System
 
-Система управления доставкой заказов: клиент создаёт заказ, оператор назначает курьера, курьер двигает доставку по статусам. Всё с историей изменений.
+Веб-система управления доставкой заказов на ASP.NET Core 9 и SQLite. Клиент оформляет заказ, оператор назначает курьера и контролирует выполнение, курьер ведёт доставку по статусам. Все изменения сохраняются в истории.
 
-![Архитектура](docs/img/architecture.png)
+![Оператор](docs/img/ui-operator.png)
+
+## Содержание
+- [Возможности](#что-умеет)
+- [Архитектура](#как-устроено)
+- [База данных](#база-данных)
+- [Зависимости](#зависимости)
+- [Запуск](#запуск)
+- [Интерфейс](#интерфейс)
+- [API](#api)
 
 ## Что умеет
 Вход по логину и паролю, три роли:
@@ -55,17 +64,25 @@ SQLite, один файл (`data/delivery.db` локально, `/data/delivery.
 Связи между модулями и полная таблица — в [docs/dependencies.md](docs/dependencies.md).
 
 ## Запуск
-**Через Docker** (нужен только Docker):
+
+### Docker
 ```bash
 docker compose up --build
 ```
-**Без Docker** (нужен [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)): `run.bat` (Windows) или `./run.sh` (Linux/Mac), либо
+
+### Локально
+Требуется [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0).
 ```bash
 dotnet run --project src/ApiHost --no-launch-profile --urls http://localhost:8080
 ```
-Открыть: **http://localhost:8080**. Проверка живости: `GET /api/health`.
+Либо `run.bat` (Windows) / `./run.sh` (Linux, macOS). В Visual Studio стартовый проект — `ApiHost`.
 
-Тесты: `dotnet test OrderDeliveryManagementSystem.sln`.
+Приложение доступно на http://localhost:8080, проверка работоспособности — `GET /api/health`.
+
+### Тесты
+```bash
+dotnet test OrderDeliveryManagementSystem.sln
+```
 
 ## Интерфейс
 Тёмная диспетчерская консоль: компактные таблицы, акцентный синий, шрифты Inter и JetBrains Mono лежат локально (`wwwroot/fonts`, лицензии OFL рядом). На телефоне интерфейс перестраивается в мобильное приложение.
@@ -109,8 +126,5 @@ dotnet run --project src/ApiHost --no-launch-profile --urls http://localhost:808
 
 Подробнее — в [docs/contracts.md](docs/contracts.md); соответствие ТЗ — в [docs/tz-traceability.md](docs/tz-traceability.md).
 
-## Ограничения
+## Известные ограничения
 Сессии хранятся в памяти (после перезапуска сервера нужен повторный вход), демо-пароли равны логинам — для боевого использования их нужно сменить.
-
-## Не входит
-Платежи, GPS, карты, SMS, мобильное приложение, маркетплейсы.

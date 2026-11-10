@@ -22,7 +22,12 @@ public static class DeliveryRules
     public static IReadOnlyList<DeliveryStatus> Next(DeliveryStatus from) =>
         Transitions.TryGetValue(from, out var n) ? n : Array.Empty<DeliveryStatus>();
 
-    /// <summary>Статус заказа, который соответствует статусу доставки.</summary>
+    /// <summary>
+    /// Статус заказа, который соответствует статусу доставки (таблица соответствия):
+    /// Created→Created, Assigned→Confirmed, Accepted→Preparing, InTransit→InDelivery,
+    /// Delivered→Delivered, Failed→DeliveryFailed, Cancelled→Cancelled.
+    /// Неудачная доставка и отмена заказа — разные события.
+    /// </summary>
     public static OrderStatus ToOrderStatus(DeliveryStatus s) => s switch
     {
         DeliveryStatus.Created => OrderStatus.Created,
@@ -30,6 +35,8 @@ public static class DeliveryRules
         DeliveryStatus.Accepted => OrderStatus.Preparing,
         DeliveryStatus.InTransit => OrderStatus.InDelivery,
         DeliveryStatus.Delivered => OrderStatus.Delivered,
-        _ => OrderStatus.Cancelled,
+        DeliveryStatus.Failed => OrderStatus.DeliveryFailed,
+        DeliveryStatus.Cancelled => OrderStatus.Cancelled,
+        _ => throw new ArgumentOutOfRangeException(nameof(s), s, null),
     };
 }

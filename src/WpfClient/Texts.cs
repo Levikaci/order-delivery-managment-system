@@ -21,6 +21,7 @@ public static class Texts
         ["InDelivery"] = "В доставке",
         ["Delivered"] = "Доставлен",
         ["Cancelled"] = "Отменён",
+        ["DeliveryFailed"] = "Доставка не удалась",
     };
     public static readonly Dictionary<string, string> Courier = new()
     {

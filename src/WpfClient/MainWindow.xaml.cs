@@ -330,6 +330,7 @@ public partial class MainWindow : Window
 
         // время
         var s4 = Section("ВРЕМЯ");
+        KV(s4, "Статус заказа", Texts.O(d["orderStatus"]?.ToString()), d["orderStatus"]?.ToString() is "DeliveryFailed" or "Cancelled" ? "Danger" : "Text");
         KV(s4, "Создан", r.Created); KV(s4, "Начата", Dt(d["startedAt"])); KV(s4, "Завершена", Dt(d["finishedAt"]));
         if (d["confirmedAt"] != null) KV(s4, "Получение", Dt(d["confirmedAt"]));
         KV(s4, "Причина сбоя", d["failureReason"]?.ToString(), "Danger");

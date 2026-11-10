@@ -48,7 +48,7 @@ Created -> Assigned -> Accepted -> InTransit -> Delivered
 
 ## Фактическое состояние
 
-150 автоматических тестов (41 модульный + 109 интеграционных; `dotnet test OrderDeliveryManagementSystem.sln`, все проходят). Интеграционные тесты работают на **реальном PostgreSQL**: каждый тест создаёт и удаляет собственную базу.
+171 автоматический тест (41 модульный + 130 интеграционных; `dotnet test OrderDeliveryManagementSystem.sln`, все проходят). Интеграционные тесты работают на **реальном PostgreSQL**: каждый тест создаёт и удаляет собственную базу.
 
 Подключение к серверу — переменная `TEST_PG_ADMIN` (строка подключения с правом `CREATE DATABASE`); по умолчанию `Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=postgres`. Быстрый старт: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`. В CI — service-контейнер (`.github/workflows/ci.yml`).
 

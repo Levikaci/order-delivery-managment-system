@@ -27,7 +27,7 @@
 | Обновление существующей установки | `tools/SqliteImport` | `SqliteImportTests` |
 | Идемпотентность и устойчивость к сбоям | `requestId`, транзакции, `FOR UPDATE` | `ReliabilityTests`, `PostOrders_WithSameRequestId_IsIdempotent` |
 | Запуск | `docker compose up --build` или `dotnet run` | CI (`.github/workflows/ci.yml`) |
-| Тесты | 150 автоматических тестов | `dotnet test OrderDeliveryManagementSystem.sln` |
+| Тесты | 171 автоматический тест | `dotnet test OrderDeliveryManagementSystem.sln` |
 
 ## Допустимые отклонения от ТЗ
 

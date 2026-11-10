@@ -20,9 +20,9 @@
 | Оператор | `operator` / `operator` | видит все заказы, назначает курьера (вручную или автоматически), меняет статусы, ведёт справочники. Заказы **не создаёт** |
 | Курьер | `alexey`, `dmitry`, `olga` (пароль = логин) | свой маршрутный лист, статусы «принял / в пути / доставил / не удалось» (с причиной), переключатель онлайн/офлайн |
 
-- Заказ и доставка имеют **раздельные статусы**. Доставка: `Created → Assigned → Accepted → InTransit → Delivered`, а также `Failed` (обязательна причина) и `Cancelled`. Заказ: `Created, Confirmed, Preparing, InDelivery, Delivered, Cancelled, DeliveryFailed` — выводится из статуса доставки: `Failed → DeliveryFailed` (доставка не удалась), `Cancelled → Cancelled` (заказ отменён). Подробнее — [ADR-006](docs/decisions/ADR-006-order-and-delivery-statuses.md).
+- Заказ и доставка имеют **раздельные статусы**. Доставка: `Created → Assigned → Accepted → InTransit → Delivered`, а также `Failed` (обязательна причина) и `Cancelled`. Неудачную доставку оператор может повторить (`retry`): она возвращается в `Created`, предыдущая попытка остаётся в истории. Заказ: `Created, Confirmed, Preparing, InDelivery, Delivered, Cancelled, DeliveryFailed` — выводится из статуса доставки: `Failed → DeliveryFailed` (доставка не удалась), `Cancelled → Cancelled` (заказ отменён). Подробнее — [ADR-006](docs/decisions/ADR-006-order-and-delivery-statuses.md).
 - Состояния курьера: `Available, Busy, Offline, Blocked`. Занятого, офлайн и заблокированного назначить нельзя; после финального статуса курьер освобождается.
-- `POST /api/orders` создаёт заказ + доставку и сразу подбирает свободного курьера. Если свободных нет — доставка остаётся `Created`, оператор назначит позже.
+- `POST /api/orders` создаёт заказ + доставку и сразу подбирает свободного курьера с наименьшим числом доставок за последние 24 часа (при равенстве — по имени). Если свободных нет — доставка остаётся `Created`, оператор назначит позже.
 - Фиксируются время начала и завершения доставки, история статусов доставки и заказа (с автором действия) и журнал изменений заказа: состав, адрес, комментарий (было → стало, кто и когда).
 - Создание заказа атомарно; сбой автоназначения не отменяет заказ. Необязательный `requestId` в `POST /api/orders` делает повтор запроса идемпотентным.
 - Деньги хранятся в копейках, наружу отдаются в рублях (`decimal`).
@@ -36,17 +36,17 @@
 - `src/ApiHost` — ASP.NET Core 9 minimal API, хранилище на PostgreSQL (`Store.cs`), миграции схемы (`Db/`), авторизация (`Auth.cs`).
 - `src/Contracts` — DTO и перечисления; `OrderModule`, `DeliveryModule`, `CourierModule`, `CustomerModule` — бизнес-правила каждого модуля (`*Rules.cs`), общение через контракты.
 - `tools/SqliteImport` — разовый перенос данных из старой версии (SQLite) в PostgreSQL.
-- `tests/` — 150 тестов (правила модулей, сценарии, миграции, HTTP-API и роли на реальном PostgreSQL).
+- `tests/` — 171 тест (правила модулей, сценарии, миграции, HTTP-API и роли на реальном PostgreSQL).
 - `docs/` — этапы курсового, ADR, архитектура, тесты.
 
 ![Архитектура](docs/img/architecture.png)
 
 ## База данных
-PostgreSQL 16. Строка подключения — `ConnectionStrings:Default` (по умолчанию `Host=localhost;Port=5432;Database=delivery;Username=delivery;Password=delivery`; в Docker — переменная `ConnectionStrings__Default`). Схема создаётся и обновляется **версионированными миграциями** при старте (`src/ApiHost/Db/Migrations.cs`, учёт — таблица `schema_migrations`). Каждая миграция выполняется в транзакции; таблицы и данные автоматически не удаляются. Если схема неизвестна, создана более новой версией или миграция упала, приложение не стартует и пишет причину. На пустой базе добавляются демо-данные. В Docker данные лежат в volume `pgdata`.
+PostgreSQL 16. Строка подключения — `ConnectionStrings:Default` (по умолчанию `Host=localhost;Port=5432;Database=delivery;Username=delivery;Password=delivery`; в Docker — переменная `ConnectionStrings__Default`). Схема создаётся и обновляется **версионированными миграциями** при старте (`src/ApiHost/Db/Migrations.cs`, учёт — таблица `schema_migrations`). Каждая миграция выполняется в транзакции; таблицы и данные автоматически не удаляются. Если схема неизвестна, создана более новой версией или миграция упала, приложение не стартует и пишет причину. На пустой базе по умолчанию добавляются демо-данные (см. «Боевой запуск»). В Docker данные лежат в volume `pgdata`.
 
 ![Схема БД (PostgreSQL)](docs/img/db-schema.png)
 
-Текстовое описание схемы — в [docs/architecture.md](docs/architecture.md#схема-бд-миграции-00010003). Основные таблицы: `customers`, `customer_addresses`, `couriers`, `users` (пароли PBKDF2), `products` (`price_kopecks`), `orders`, `order_items`, `deliveries`, `status_history`, `order_history`, `order_changes`.
+Текстовое описание схемы — в [docs/architecture.md](docs/architecture.md#схема-бд-миграции-00010004). Основные таблицы: `customers`, `customer_addresses`, `couriers`, `users` (пароли PBKDF2), `products` (`price_kopecks`), `orders`, `order_items`, `deliveries`, `status_history`, `order_history`, `order_changes`, `sessions`, `schema_migrations`.
 
 ### Обновление со старой версии (SQLite)
 См. [docs/architecture.md](docs/architecture.md#обновление-существующей-установки): запустить PostgreSQL, затем
@@ -72,6 +72,9 @@ dotnet run --project tools/SqliteImport -- data/delivery.db "Host=localhost;Port
 docker compose up --build
 ```
 Поднимает PostgreSQL (`db`) и API (`app`) на http://localhost:8080. Пароль БД можно задать переменной `POSTGRES_PASSWORD`.
+
+### Боевой запуск (без демо-данных)
+Демо-аккаунты имеют предсказуемые пароли (`пароль = логин`), поэтому для рабочей установки их отключают: `Seed:Demo=false` (переменная `Seed__Demo=false`) и пароль первого оператора `Seed:OperatorPassword` (переменная `Seed__OperatorPassword`, не короче 8 символов). На пустой базе создаётся только пользователь `operator` с этим паролем, без клиентов, курьеров и товаров; если пароль не задан, сервер не стартует. В Docker: `SEED_DEMO=false OPERATOR_PASSWORD=... docker compose up -d`. Любой пользователь может сменить пароль через `POST /api/auth/password`.
 
 ### Локально
 Требуется [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) и PostgreSQL (проще всего `docker compose up -d db`).
@@ -129,7 +132,8 @@ dotnet test OrderDeliveryManagementSystem.sln
 
 | Метод | Endpoint | Что делает |
 |---|---|---|
-| POST | `/api/auth/login`, `/api/auth/logout` | вход / выход |
+| POST | `/api/auth/login`, `/api/auth/logout` | вход / выход (сессии хранятся в PostgreSQL и переживают перезапуск, 12 часов) |
+| POST | `/api/auth/password` | смена своего пароля (`oldPassword`, `newPassword` ≥ 8 символов); остальные сессии пользователя завершаются |
 | GET | `/api/auth/me`, `/api/state` | текущий пользователь; данные для UI (фильтруются по роли) |
 | GET | `/api/health` | проверка живости |
 | POST | `/api/orders` | создать заказ (+ доставка, автоназначение); необязательный `requestId` — идемпотентность |
@@ -141,6 +145,7 @@ dotnet test OrderDeliveryManagementSystem.sln
 | POST | `/api/deliveries/{id}/assign` | назначить курьера (пустой `courierId` — авто) |
 | PATCH | `/api/deliveries/{id}/status` | сменить статус (`Failed` требует `reason`) |
 | POST | `/api/deliveries/{id}/confirm` | клиент подтверждает получение |
+| POST | `/api/deliveries/{id}/retry` | оператор: повторить неудачную доставку (`Failed` → `Created`, курьер подбирается заново, история сохраняется) |
 | GET/POST/PUT/DELETE | `/api/customers`, `/api/couriers`, `/api/products` | справочники |
 | GET/POST | `/api/customers/{id}/addresses` | адреса клиента |
 | GET/PUT/DELETE | `/api/addresses/{id}` | адрес |
@@ -153,11 +158,4 @@ dotnet test OrderDeliveryManagementSystem.sln
 Ошибки сервера (`STORAGE_ERROR`, `INTERNAL_ERROR`) и некорректный JSON (`INVALID_REQUEST`) тоже приходят в едином формате ошибок.
 
 ## Версии и история изменений
-Версия — `Directory.Build.props` (сейчас 2.0.0, семантическое версионирование), список изменений — [CHANGELOG.md](CHANGELOG.md). Сообщения коммитов — [Conventional Commits](https://www.conventionalcommits.org/ru/v1.0.0/) (`feat`, `fix`, `refactor`, `test`, `docs`, `build`, `chore`).
-
-## Известные ограничения
-- Сессии хранятся в памяти (после перезапуска сервера нужен повторный вход).
-- Демо-пароли равны логинам — для боевого использования их нужно сменить.
-- Автоподбор курьера выбирает первого свободного по имени (без балансировки нагрузки).
-- После `Failed` доставку нельзя повторить в рамках того же заказа (ТЗ этого не предусматривает).
-- WPF-клиент собирается и запускается только под Windows; в CI он собирается с `EnableWindowsTargeting`, ручная проверка интерфейса не автоматизирована.
+Версия — `Directory.Build.props` (сейчас 2.1.0, семантическое версионирование), список изменений — [CHANGELOG.md](CHANGELOG.md). Сообщения коммитов — [Conventional Commits](https://www.conventionalcommits.org/ru/v1.0.0/) (`feat`, `fix`, `refactor`, `test`, `docs`, `build`, `chore`).

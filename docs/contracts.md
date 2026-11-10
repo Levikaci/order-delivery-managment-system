@@ -20,6 +20,8 @@
 | GET | `/api/customers/{id}` | Данные клиента |
 | POST | `/api/auth/login` | Вход, возвращает Bearer-токен |
 | POST | `/api/deliveries/{id}/confirm` | Подтверждение получения клиентом |
+| POST | `/api/deliveries/{id}/retry` | Повтор неудачной доставки (только оператор): `Failed` → `Created`, курьер подбирается заново |
+| POST | `/api/auth/password` | Смена пароля (`oldPassword`, `newPassword` ≥ 8 символов) |
 | PUT | `/api/orders/{id}` | Редактирование заказа (Created/Assigned) |
 | PATCH | `/api/couriers/{id}/state` | Состояние курьера |
 | GET/POST/PUT/DELETE | `/api/products`, `/api/customers/{id}/addresses` | Товары и адреса |

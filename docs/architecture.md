@@ -31,7 +31,7 @@
 - **Деньги** — целые копейки (`bigint`), наружу рубли (`decimal`).
 - **Статусы:** заказ выводится из доставки; `Failed → DeliveryFailed`, `Cancelled → Cancelled`.
 
-### Схема БД (миграции 0001–0003)
+### Схема БД (миграции 0001–0004)
 
 ```text
 customers(id, name, phone)                      customer_addresses(id, customer_id, label, city, street, house, apartment)
@@ -41,10 +41,11 @@ order_items(id, order_id, product_id, name, price_kopecks, quantity)
 deliveries(id, order_id, courier_id, status, created_at, started_at, finished_at, failure_reason, confirmed_at)
 status_history(id, delivery_id, status, at, comment, actor_id)   order_history(id, order_id, status, at, comment, actor_id)
 order_changes(id, order_id, at, actor_id, actor_name, field, old_value, new_value)
+sessions(token_hash, user_id, role, ref_id, name, expires_at)
 schema_migrations(version, name, applied_at)
 ```
 
-Диаграмма схемы (PostgreSQL, миграции 0001–0003):
+Диаграмма схемы (PostgreSQL, миграции 0001–0004):
 
 ![Схема БД](img/db-schema.png)
 

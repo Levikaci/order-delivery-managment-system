@@ -93,3 +93,19 @@ Blocked
 - маршрутизацию;
 - HTTP-ответы;
 - единый формат ошибок.
+
+
+---
+
+## Актуальное состояние реализации (v2.0.0)
+
+- В модулях `OrderModule`, `DeliveryModule`, `CourierModule`, `CustomerModule` реализованы **статические правила** (`*Rules.cs`) и `Money`; хранение и сценарии находятся в `ApiHost.Store`. Ранние `OrderService`/`DeliveryService` удалены (ADR-007).
+- `OrderStatus` дополнен значением **`DeliveryFailed`** (доставка не удалась, заказ не отменён) — ADR-006:
+
+```text
+Created, Confirmed, Preparing, InDelivery, Delivered, Cancelled, DeliveryFailed
+```
+
+- `OrderModule.Money` — расчёты в копейках (ADR-005).
+- «Просмотр истории» заказа дополнен журналом изменений состава, адреса и комментария (ADR-007) — расширение ТЗ, помеченное как таковое.
+- «Отмена», «изменение статуса», «фиксация времени» и «регистрация неудачной доставки» выполняет `Store.ChangeStatus`.

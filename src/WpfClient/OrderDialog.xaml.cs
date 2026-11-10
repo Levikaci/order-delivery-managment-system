@@ -62,11 +62,13 @@ public partial class OrderDialog : Window
     /// <summary>Тело запроса POST /api/orders или PUT /api/orders/{id}.</summary>
     public Dictionary<string, object?> Body { get; private set; } = new();
 
+    private readonly Guid _requestId = Guid.NewGuid(); // ключ идемпотентности: двойной клик не создаст два заказа
+
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
         var items = _rows.Where(r => r.Quantity > 0).Select(r => new { productId = r.Id, quantity = r.Quantity }).ToList();
         if (items.Count == 0) { MsgDialog.Info(this, "Добавьте в заказ хотя бы один товар"); return; }
-        var body = new Dictionary<string, object?> { ["customerId"] = CustomerId, ["items"] = items, ["comment"] = Comment.Text.Trim() };
+        var body = new Dictionary<string, object?> { ["customerId"] = CustomerId, ["items"] = items, ["comment"] = Comment.Text.Trim(), ["requestId"] = _requestId };
         if (Saved.SelectedIndex >= 0) body["addressId"] = Guid.Parse(_addresses[Saved.SelectedIndex]["id"]!.GetValue<string>());
         else
         {

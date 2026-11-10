@@ -19,8 +19,11 @@ public record AddressDto(string City, string Street, string House, string? Apart
 
 public record NewPerson(string Name, string? Phone, string? Login = null, string? Password = null);
 public record ItemRequest(Guid ProductId, int Quantity);
+/// <summary>RequestId — необязательный ключ идемпотентности: повтор запроса с тем же ключом не создаёт второй заказ.</summary>
 public record CreateOrderRequest(Guid CustomerId, List<ItemRequest>? Items, AddressDto? DeliveryAddress = null,
-    Guid? AddressId = null, string? Comment = null, bool SaveAddress = false);
+    Guid? AddressId = null, string? Comment = null, bool SaveAddress = false,
+    Guid? RequestId = null);
+/// <summary>Comment: null — не менять, пустая строка — очистить.</summary>
 public record UpdateOrderRequest(List<ItemRequest>? Items, AddressDto? DeliveryAddress = null, Guid? AddressId = null, string? Comment = null);
 public record CreateDeliveryBody(Guid OrderId);
 public record AssignRequest(Guid? CourierId);

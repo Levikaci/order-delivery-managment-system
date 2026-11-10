@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Security.Cryptography;
 using ApiHost.Db;
 using CourierModule;
@@ -448,6 +449,7 @@ public class Store : IDisposable
         using (var c = Open())
         {
             if (Count(c, "SELECT COUNT(*) FROM customers WHERE id=@i", ("i", r.CustomerId)) == 0) return (null, false, "CUSTOMER_NOT_FOUND");
+            if (ExistingByRequest(c, r) is { } dup) return (dup, dup.CourierId is not null, null); // повторный запрос
             var (lines, e1) = ResolveItems(c, r.Items);
             if (lines is null) return (null, false, e1);
             var (text, inline, e2) = ResolveAddress(c, r.CustomerId, r.AddressId, r.DeliveryAddress);
@@ -455,19 +457,38 @@ public class Store : IDisposable
 
             var orderId = Guid.NewGuid(); id = Guid.NewGuid();
             using var tx = c.BeginTransaction();
-            Cmd(c, "INSERT INTO orders(id,customer_id,address,comment,status,created_at) VALUES(@i,@c,@a,@m,@s,@t)",
-                ("i", orderId), ("c", r.CustomerId), ("a", text),
-                ("m", string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment.Trim()), ("s", nameof(OrderStatus.Created)), ("t", Now())).ExecuteNonQuery();
-            InsertItems(c, orderId, lines);
-            OrderHist(c, orderId, OrderStatus.Created, "Заказ создан");
-            InsertDelivery(c, id, orderId);
-            if (r.SaveAddress && inline is not null)
-                AddAddr(c, r.CustomerId, "", inline.City, inline.Street, inline.House, inline.Apartment);
-            tx.Commit();
+            try
+            {
+                Cmd(c, "INSERT INTO orders(id,customer_id,address,comment,status,created_at,request_id) VALUES(@i,@c,@a,@m,@s,@t,@rq)",
+                    ("i", orderId), ("c", r.CustomerId), ("a", text),
+                    ("m", string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment.Trim()), ("s", nameof(OrderStatus.Created)), ("t", Now()), ("rq", r.RequestId)).ExecuteNonQuery();
+                InsertItems(c, orderId, lines);
+                OrderHist(c, orderId, OrderStatus.Created, "Заказ создан");
+                InsertDelivery(c, id, orderId);
+                if (r.SaveAddress && inline is not null)
+                    AddAddr(c, r.CustomerId, "", inline.City, inline.Street, inline.House, inline.Apartment);
+                tx.Commit(); // заказ, позиции, история и доставка сохраняются атомарно
+            }
+            catch (Exception ex) when (IsPg(ex, PgUniqueViolation) && r.RequestId is not null)
+            {
+                // параллельный дубль того же запроса уже создал заказ
+                tx.Rollback();
+                using var c2 = Open();
+                if (ExistingByRequest(c2, r) is { } dup2) return (dup2, dup2.CourierId is not null, null);
+                throw;
+            }
             _log.LogInformation("Создан заказ {Order}, доставка {Delivery}", orderId, id);
         }
+        // Назначение курьера — отдельный шаг: его сбой не отменяет уже сохранённый заказ (сценарий 2 из ТЗ).
         var assigned = TryAutoAssign(id);
         return (Delivery(id), assigned, null);
+    }
+
+    private static Delivery? ExistingByRequest(NpgsqlConnection c, CreateOrderRequest r)
+    {
+        if (r.RequestId is not Guid rid) return null;
+        return Cmd(c, "SELECT id FROM orders WHERE customer_id=@c AND request_id=@r", ("c", r.CustomerId), ("r", rid)).ExecuteScalar() is Guid oid
+            ? Deliveries(c, orderId: oid).FirstOrDefault() : null;
     }
 
     private static void InsertItems(NpgsqlConnection c, Guid orderId, List<(Product p, int q)> lines)
@@ -525,7 +546,16 @@ public class Store : IDisposable
     }
 
     // ---------- назначение курьера ----------
-    private bool TryAutoAssign(Guid deliveryId) => Assign(deliveryId, null) is null;
+    private bool TryAutoAssign(Guid deliveryId)
+    {
+        try { return Assign(deliveryId, null) is null; }
+        catch (Exception ex) when (ex is DbException or TimeoutException)
+        {
+            // заказ уже сохранён, доставка осталась Created: оператор назначит курьера позже
+            _log.LogError(ex, "Не удалось автоматически назначить курьера для доставки {Delivery}", deliveryId);
+            return false;
+        }
+    }
 
     /// <summary>Назначает курьера. Без courierId выбирается свободный курьер автоматически (повторное назначение).</summary>
     public string? Assign(Guid id, Guid? courierId)

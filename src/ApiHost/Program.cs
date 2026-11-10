@@ -43,6 +43,8 @@ var messages = new Dictionary<string, string>
     ["UNAUTHORIZED_STATUS_CHANGE"] = "Вы не можете изменить этот статус (отмена возможна только до передачи в доставку)",
     ["FAILURE_REASON_REQUIRED"] = "Укажите причину, по которой доставка не выполнена",
     ["ORDER_NOT_EDITABLE"] = "Заказ нельзя изменить после принятия курьером",
+    ["STORAGE_ERROR"] = "Временная ошибка хранилища данных. Повторите запрос позже",
+    ["INTERNAL_ERROR"] = "Внутренняя ошибка сервера",
 };
 
 IResult Err(string code)
@@ -51,6 +53,7 @@ IResult Err(string code)
     {
         "UNAUTHORIZED" or "INVALID_CREDENTIALS" => 401,
         "FORBIDDEN" or "UNAUTHORIZED_STATUS_CHANGE" => 403,
+        "STORAGE_ERROR" or "INTERNAL_ERROR" => 500,
         _ when code.EndsWith("NOT_FOUND") => 404,
         _ when code.EndsWith("HAS_ORDERS") || code.StartsWith("DELIVERY_ALREADY") || code is "COURIER_NOT_AVAILABLE" or "COURIER_BUSY"
             or "INVALID_STATUS_TRANSITION" or "ORDER_NOT_EDITABLE" or "LOGIN_TAKEN" => 409,
@@ -58,6 +61,20 @@ IResult Err(string code)
     };
     return Results.Json(new { success = false, errorCode = code, error = code, message = messages.GetValueOrDefault(code, code) }, statusCode: status);
 }
+
+// Любое необработанное исключение — в едином формате ошибок, без трассировки в ответе.
+app.UseExceptionHandler(h => h.Run(async ctx =>
+{
+    var ex = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+    var code = ex switch
+    {
+        BadHttpRequestException or System.Text.Json.JsonException => "INVALID_REQUEST",
+        System.Data.Common.DbException or TimeoutException => "STORAGE_ERROR",
+        _ => "INTERNAL_ERROR"
+    };
+    if (code != "INVALID_REQUEST") ctx.RequestServices.GetRequiredService<ILogger<Program>>().LogError(ex, "Необработанная ошибка запроса {Path}", ctx.Request.Path);
+    await Err(code).ExecuteAsync(ctx);
+}));
 
 // Фильтр доступа: пустой список ролей = любой вошедший пользователь.
 RouteHandlerBuilder Roles(RouteHandlerBuilder b, params string[] roles) => b.AddEndpointFilter(async (ctx, next) =>

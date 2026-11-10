@@ -41,5 +41,10 @@ CREATE INDEX ix_deliveries_courier ON deliveries(courier_id);
 CREATE INDEX ix_orders_customer ON orders(customer_id);
 CREATE INDEX ix_history_delivery ON status_history(delivery_id);
 CREATE INDEX ix_ohistory_order ON order_history(order_id);"),
+
+        new(2, "order_request_id", @"
+-- идемпотентное создание заказа: повтор запроса с тем же requestId возвращает уже созданный заказ
+ALTER TABLE orders ADD COLUMN request_id uuid NULL;
+CREATE UNIQUE INDEX ux_orders_request ON orders(customer_id, request_id) WHERE request_id IS NOT NULL;"),
     };
 }

@@ -144,3 +144,24 @@ DeliveryDto
 10. Повтор: идемпотентная обработка уже примененного перехода.
 11. Аутентификация: авторизованный пользователь или назначенный курьер.
 12. Версия: `DeliveryStatusContract v1`.
+
+
+---
+
+## Актуальное состояние реализации (v2.0.0)
+
+Разделы выше — первоначальные контракты. Что изменилось или добавлено:
+
+| Что | Описание |
+|---|---|
+| `POST /api/orders` | Необязательное поле `requestId` (GUID): повторный запрос с тем же ключом возвращает уже созданный заказ. Ответ дополнен `orderStatus`, `courierId`, `courierAssigned`, `message` |
+| `PUT /api/orders/{id}` | `comment`: не передан — не менять, `""` — очистить |
+| `GET /api/orders/{id}/changes` | Журнал изменений заказа (оператор и владелец-клиент) |
+| Заказ / доставка | В ответ добавлены `orderStatus`, `changes[]` (`at`, `actorId`, `actorName`, `field` = `Items`/`Address`/`Comment`, `oldValue`, `newValue`); записи истории содержат `actorId` |
+| `OrderStatus` | Новое значение `DeliveryFailed` (ADR-006) |
+| Ошибки | `STORAGE_ERROR` (500, сбой хранилища), `INTERNAL_ERROR` (500), `INVALID_REQUEST` (400, некорректный JSON) в том же формате `{success, errorCode, error, message}` |
+| Внутренний интерфейс | `IDeliveryService` / `CreateDeliveryRequest` из «Протокола 1» **удалены**: создание доставки — `Store.CreateDelivery` и `POST /api/deliveries`; повтор по `orderId` идемпотентен (`DELIVERY_ALREADY_EXISTS`, 409) |
+
+Цены в API — `decimal` в рублях; хранятся в копейках (ADR-005).
+
+Права доступа проверяются на каждом endpoint ролью (`operator` / `client` / `courier`); матрица проверена тестами `ApiRoleTests`.

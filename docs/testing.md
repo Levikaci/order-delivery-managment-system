@@ -48,15 +48,25 @@ Created -> Assigned -> Accepted -> InTransit -> Delivered
 
 ## Фактическое состояние
 
-Реализовано 46 автоматических тестов (`dotnet test OrderDeliveryManagementSystem.sln`, результат: все проходят).
+150 автоматических тестов (41 модульный + 109 интеграционных; `dotnet test OrderDeliveryManagementSystem.sln`, все проходят). Интеграционные тесты работают на **реальном PostgreSQL**: каждый тест создаёт и удаляет собственную базу.
 
-- `tests/OrderModule.Tests` — правила заказа (количества, редактирование, отмена клиентом, итог) и модульные правила доставки/курьера/клиента.
-- `tests/Integration.Tests` — сценарии на реальной SQLite: создание заказа с автоназначением, нет свободного курьера, повторное назначение, занятый/офлайн/заблокированный курьер, полный путь до `Delivered`, `Failed` с причиной и без, недопустимые переходы, идемпотентность, отмена клиентом, подтверждение получения, адреса, редактирование, права ролей.
+Подключение к серверу — переменная `TEST_PG_ADMIN` (строка подключения с правом `CREATE DATABASE`); по умолчанию `Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=postgres`. Быстрый старт: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`. В CI — service-контейнер (`.github/workflows/ci.yml`).
+
+| Набор | Что проверяет |
+|---|---|
+| `OrderModule.Tests/RulesTests` | переходы статусов, таблица «доставка → заказ» (`Failed` ≠ `Cancelled`), финальные статусы, количества, права отмены, правила курьера и клиента |
+| `OrderModule.Tests/MoneyTests` | точность копеек, округление, 0.1+0.1+0.1, переполнение, границы цены |
+| `Integration.Tests/ScenarioTests` | сценарии ТЗ на `Store`: создание, автоназначение, нет курьера, повторное назначение, полный цикл, отмена, неудача, права ролей, адреса, редактирование, справочники |
+| `Integration.Tests/MigrationTests` | миграции: чистая БД, повторный запуск, обновление с данными, откат неудачной миграции, чужая и более новая схема, параллельный старт, перезапуск |
+| `Integration.Tests/SqliteImportTests` | перенос SQLite v2 → PostgreSQL: данные, копейки, `DeliveryFailed`, вход после импорта, отказы |
+| `Integration.Tests/ReliabilityTests` | отказы БД (откат, повтор), идемпотентность `requestId`, параллельные назначения и дубли, сохранение комментария |
+| `Integration.Tests/ChangeLogTests` | журнал изменений: значения, автор, время, no-op, очистка, перезапуск, `actor_id` |
+| `Integration.Tests/ApiTests` | HTTP: матрица роль × endpoint (401/403), изоляция клиентов, права на статусы, некорректный ввод, полные циклы, деньги, перезапуск приложения, 500 `STORAGE_ERROR` |
 
 ## Команды проверки
 
 ```bash
-dotnet restore
-dotnet build
+dotnet restore OrderDeliveryManagementSystem.sln
+dotnet build OrderDeliveryManagementSystem.sln
 dotnet test OrderDeliveryManagementSystem.sln
 ```

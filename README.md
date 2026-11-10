@@ -44,11 +44,11 @@
 ## База данных
 PostgreSQL 16. Строка подключения — `ConnectionStrings:Default` (по умолчанию `Host=localhost;Port=5432;Database=delivery;Username=delivery;Password=delivery`; в Docker — переменная `ConnectionStrings__Default`). Схема создаётся и обновляется **версионированными миграциями** при старте (`src/ApiHost/Db/Migrations.cs`, учёт — таблица `schema_migrations`). Каждая миграция выполняется в транзакции; таблицы и данные автоматически не удаляются. Если схема неизвестна, создана более новой версией или миграция упала, приложение не стартует и пишет причину. На пустой базе добавляются демо-данные. В Docker данные лежат в volume `pgdata`.
 
-![Схема БД (первоначальная)](docs/img/db-schema.png)
+![Схема БД (PostgreSQL)](docs/img/db-schema.png)
 
-Актуальная схема — в [docs/architecture.md](docs/architecture.md#схема-бд-миграции-00010003). Основные таблицы: `customers`, `customer_addresses`, `couriers`, `users` (пароли PBKDF2), `products` (`price_kopecks`), `orders`, `order_items`, `deliveries`, `status_history`, `order_history`, `order_changes`.
+Текстовое описание схемы — в [docs/architecture.md](docs/architecture.md#схема-бд-миграции-00010003). Основные таблицы: `customers`, `customer_addresses`, `couriers`, `users` (пароли PBKDF2), `products` (`price_kopecks`), `orders`, `order_items`, `deliveries`, `status_history`, `order_history`, `order_changes`.
 
-### Обновление с версии на SQLite
+### Обновление со старой версии (SQLite)
 См. [docs/architecture.md](docs/architecture.md#обновление-существующей-установки): запустить PostgreSQL, затем
 ```bash
 dotnet run --project tools/SqliteImport -- data/delivery.db "Host=localhost;Port=5432;Database=delivery;Username=delivery;Password=delivery"
@@ -82,6 +82,10 @@ dotnet run --project src/ApiHost --no-launch-profile --urls http://localhost:808
 
 Приложение доступно на http://localhost:8080, проверка работоспособности — `GET /api/health`.
 
+Схема развёртывания:
+
+![Развёртывание](docs/img/deploy.png)
+
 ### WPF-клиент
 Сначала запустите сервер, затем (Windows):
 ```bash
@@ -103,6 +107,10 @@ dotnet test OrderDeliveryManagementSystem.sln
 - **Оператор**: диспетчерская (все заказы, поиск, назначение курьера вручную или автоматически, смена статуса, подтверждение получения) и справочники клиентов, курьеров и товаров.
 - **Клиент**: «Мои заказы», создание заказа из товаров с количеством, выбор или сохранение адреса, изменение и отмена заказа до принятия курьером, подтверждение получения.
 - **Курьер**: маршрутный лист, кнопки «Принять», «В пути», «Доставлено», «Не удалось» (с причиной), переход на линию и обратно.
+
+Макет окна оператора:
+
+![Макет интерфейса оператора](docs/img/wpf_layout.png)
 
 Список обновляется автоматически каждые 8 секунд, справа показана карточка заказа с составом, статусом заказа, временем, историей статусов и журналом изменений.
 
@@ -142,5 +150,4 @@ dotnet test OrderDeliveryManagementSystem.sln
 - Демо-пароли равны логинам — для боевого использования их нужно сменить.
 - Автоподбор курьера выбирает первого свободного по имени (без балансировки нагрузки).
 - После `Failed` доставку нельзя повторить в рамках того же заказа (ТЗ этого не предусматривает).
-- Диаграмма `docs/img/db-schema.png` отражает первоначальную схему; актуальная — в `docs/architecture.md`.
 - WPF-клиент собирается и запускается только под Windows; в CI он собирается с `EnableWindowsTargeting`, ручная проверка интерфейса не автоматизирована.

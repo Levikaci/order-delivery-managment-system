@@ -16,7 +16,7 @@
 
 ![Статусы](img/statuses.png)
 
-Реализация: каждый модуль (`OrderModule`, `DeliveryModule`, `CourierModule`, `CustomerModule`) содержит свои бизнес-правила (`*Rules.cs`), а `ApiHost` отвечает за HTTP, авторизацию по ролям и хранение в SQLite (`Store.cs`, транзакции на создание заказа и смену статуса). Это упрощение под курсовой: отдельных процессов и баз у модулей нет.
+Реализация: каждый модуль (`OrderModule`, `DeliveryModule`, `CourierModule`, `CustomerModule`) содержит свои бизнес-правила (`*Rules.cs`), а `ApiHost` отвечает за HTTP, авторизацию по ролям и хранение в PostgreSQL (`Store.cs`, транзакции на создание заказа и смену статуса). Это упрощение под курсовой: отдельных процессов и баз у модулей нет.
 
 
 ---
@@ -44,7 +44,9 @@ order_changes(id, order_id, at, actor_id, actor_name, field, old_value, new_valu
 schema_migrations(version, name, applied_at)
 ```
 
-Диаграмма `img/db-schema.png` относится к первоначальной схеме и не обновлялась; актуальная схема — выше.
+Диаграмма схемы (PostgreSQL, миграции 0001–0003):
+
+![Схема БД](img/db-schema.png)
 
 ### Обновление существующей установки
 

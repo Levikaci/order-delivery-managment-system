@@ -21,8 +21,9 @@ public static class OrderRules
     /// <summary>Клиент может отменить заказ только до передачи в доставку.</summary>
     public static bool CanClientCancel(DeliveryStatus s) => s is DeliveryStatus.Created or DeliveryStatus.Assigned;
 
+    /// <summary>Стоимость заказа в рублях; считается в копейках и без накопления погрешности.</summary>
     public static decimal Total(IEnumerable<(decimal Price, int Quantity)> lines) =>
-        lines.Sum(l => l.Price * l.Quantity);
+        Money.FromKopecks(Money.Total(lines.Select(l => (Money.ToKopecks(l.Price), l.Quantity))));
 
     public static OrderStatus StatusFor(DeliveryStatus s) => DeliveryRules.ToOrderStatus(s);
 }

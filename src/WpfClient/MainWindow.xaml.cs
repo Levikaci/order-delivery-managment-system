@@ -353,6 +353,23 @@ public partial class MainWindow : Window
             System.Windows.Controls.Grid.SetColumn(tx, 1); g.Children.Add(tx);
             s5.Children.Add(g);
         }
+
+        // журнал изменений заказа: состав, адрес, комментарий (кто и когда изменил)
+        var changes = d["changes"]?.AsArray() ?? new JsonArray();
+        if (changes.Count > 0)
+        {
+            var s6 = Section("ИЗМЕНЕНИЯ ЗАКАЗА");
+            foreach (var ch in changes.Reverse())
+            {
+                var field = ch!["field"]?.ToString() switch { "Items" => "Состав", "Address" => "Адрес", "Comment" => "Комментарий", var f => f ?? "" };
+                var box = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+                box.Children.Add(T(field, 13, "Text", FontWeights.Medium));
+                box.Children.Add(T($"{Dt(ch["at"])}  ·  {ch["actorName"]?.ToString() ?? "—"}", 11.5, "Faint"));
+                box.Children.Add(T("было: " + (string.IsNullOrEmpty(ch["oldValue"]?.ToString()) ? "—" : ch["oldValue"]!.ToString()), 12, "Muted", null, true, new Thickness(0, 2, 0, 0)));
+                box.Children.Add(T("стало: " + (string.IsNullOrEmpty(ch["newValue"]?.ToString()) ? "—" : ch["newValue"]!.ToString()), 12, "Text", null, true));
+                s6.Children.Add(box);
+            }
+        }
     }
 
     private UIElement StageBar(string status, JsonArray hist)

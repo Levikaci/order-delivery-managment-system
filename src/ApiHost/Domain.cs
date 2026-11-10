@@ -33,12 +33,15 @@ public record ProductRequest(string Name, decimal Price);
 public record AddressRequest(string? Label, string City, string Street, string House, string? Apartment);
 public record LoginRequest(string Login, string Password);
 
-public record StatusChange(DeliveryStatus Status, DateTime At, string? Comment);
-public record OrderStatusChange(OrderStatus Status, DateTime At, string? Comment);
+public record StatusChange(DeliveryStatus Status, DateTime At, string? Comment, Guid? ActorId = null);
+public record OrderStatusChange(OrderStatus Status, DateTime At, string? Comment, Guid? ActorId = null);
+
+/// <summary>Изменение заказа: Field = Items | Address | Comment; ActorId — users.id автора.</summary>
+public record OrderChange(DateTime At, Guid? ActorId, string? ActorName, string Field, string? OldValue, string? NewValue);
 public record OrderItemDto(Guid ProductId, string Name, decimal Price, int Quantity);
 
 /// <summary>Сессия пользователя: роль client / operator / courier и связанная запись.</summary>
-public record Session(string Role, Guid? RefId, string Name);
+public record Session(string Role, Guid? RefId, string Name, Guid? UserId = null);
 
 public class Delivery
 {
@@ -60,4 +63,5 @@ public class Delivery
     public List<OrderItemDto> Items { get; } = new();
     public List<StatusChange> History { get; } = new();
     public List<OrderStatusChange> OrderHistory { get; } = new();
+    public List<OrderChange> Changes { get; } = new();
 }

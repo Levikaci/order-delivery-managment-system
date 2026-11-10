@@ -106,13 +106,12 @@ CREATE TRIGGER trap {timing} ON {table} FOR EACH ROW EXECUTE FUNCTION boom();");
     }
 
     [Fact]
-    public void ParallelDuplicates_WithSameRequestId_CreateOneOrder()
+    public async Task ParallelDuplicates_WithSameRequestId_CreateOneOrder()
     {
         var rid = Guid.NewGuid();
-        var results = Enumerable.Range(0, 6).Select(_ => Task.Run(() => _s.CreateOrder(Req(rid)))).ToArray();
-        Task.WaitAll(results);
-        Assert.All(results, t => Assert.Null(t.Result.error));
-        Assert.Single(results.Select(t => t.Result.d!.OrderId).Distinct());
+        var results = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => Task.Run(() => _s.CreateOrder(Req(rid)))));
+        Assert.All(results, t => Assert.Null(t.error));
+        Assert.Single(results.Select(t => t.d!.OrderId).Distinct());
         Assert.Equal(1, Rows("orders"));
     }
 
@@ -133,27 +132,25 @@ CREATE TRIGGER trap {timing} ON {table} FOR EACH ROW EXECUTE FUNCTION boom();");
 
     // ---- параллельные запросы ----
     [Fact]
-    public void ParallelOrders_OneFreeCourier_OnlyOneGetsAssigned()
+    public async Task ParallelOrders_OneFreeCourier_OnlyOneGetsAssigned()
     {
         foreach (var c in _s.Couriers().Skip(1)) Assert.Null(_s.SetCourierState(c.Id, CourierState.Offline, true));
-        var results = Enumerable.Range(0, 8).Select(_ => Task.Run(() => _s.CreateOrder(Req()))).ToArray();
-        Task.WaitAll(results);
-        Assert.All(results, t => Assert.Null(t.Result.error));
-        Assert.Equal(1, results.Count(t => t.Result.courierAssigned));
-        Assert.Equal(7, results.Count(t => t.Result.d!.Status == DeliveryStatus.Created));
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => _s.CreateOrder(Req()))));
+        Assert.All(results, t => Assert.Null(t.error));
+        Assert.Equal(1, results.Count(t => t.courierAssigned));
+        Assert.Equal(7, results.Count(t => t.d!.Status == DeliveryStatus.Created));
         Assert.Equal(1, Rows("couriers WHERE state='Busy'"));
     }
 
     [Fact]
-    public void ParallelAssign_SameDelivery_OnlyOneWins()
+    public async Task ParallelAssign_SameDelivery_OnlyOneWins()
     {
         foreach (var c in _s.Couriers()) _s.SetCourierState(c.Id, CourierState.Offline, true);
         var d = _s.CreateOrder(Req()).d!;
         foreach (var c in _s.Couriers()) _s.SetCourierState(c.Id, CourierState.Available, true);
-        var results = Enumerable.Range(0, 5).Select(_ => Task.Run(() => _s.Assign(d.DeliveryId, null))).ToArray();
-        Task.WaitAll(results);
-        Assert.Equal(1, results.Count(t => t.Result is null));
-        Assert.All(results.Where(t => t.Result is not null), t => Assert.Equal("DELIVERY_ALREADY_ASSIGNED", t.Result));
+        var results = await Task.WhenAll(Enumerable.Range(0, 5).Select(_ => Task.Run(() => _s.Assign(d.DeliveryId, null))));
+        Assert.Equal(1, results.Count(r => r is null));
+        Assert.All(results.Where(r => r is not null), r => Assert.Equal("DELIVERY_ALREADY_ASSIGNED", r));
         Assert.Equal(1, Rows("couriers WHERE state='Busy'"));
     }
 

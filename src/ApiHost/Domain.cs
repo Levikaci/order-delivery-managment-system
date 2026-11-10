@@ -19,8 +19,11 @@ public record AddressDto(string City, string Street, string House, string? Apart
 
 public record NewPerson(string Name, string? Phone, string? Login = null, string? Password = null);
 public record ItemRequest(Guid ProductId, int Quantity);
+/// <summary>RequestId — необязательный ключ идемпотентности: повтор запроса с тем же ключом не создаёт второй заказ.</summary>
 public record CreateOrderRequest(Guid CustomerId, List<ItemRequest>? Items, AddressDto? DeliveryAddress = null,
-    Guid? AddressId = null, string? Comment = null, bool SaveAddress = false);
+    Guid? AddressId = null, string? Comment = null, bool SaveAddress = false,
+    Guid? RequestId = null);
+/// <summary>Comment: null — не менять, пустая строка — очистить.</summary>
 public record UpdateOrderRequest(List<ItemRequest>? Items, AddressDto? DeliveryAddress = null, Guid? AddressId = null, string? Comment = null);
 public record CreateDeliveryBody(Guid OrderId);
 public record AssignRequest(Guid? CourierId);
@@ -30,12 +33,15 @@ public record ProductRequest(string Name, decimal Price);
 public record AddressRequest(string? Label, string City, string Street, string House, string? Apartment);
 public record LoginRequest(string Login, string Password);
 
-public record StatusChange(DeliveryStatus Status, DateTime At, string? Comment);
-public record OrderStatusChange(OrderStatus Status, DateTime At, string? Comment);
+public record StatusChange(DeliveryStatus Status, DateTime At, string? Comment, Guid? ActorId = null);
+public record OrderStatusChange(OrderStatus Status, DateTime At, string? Comment, Guid? ActorId = null);
+
+/// <summary>Изменение заказа: Field = Items | Address | Comment; ActorId — users.id автора.</summary>
+public record OrderChange(DateTime At, Guid? ActorId, string? ActorName, string Field, string? OldValue, string? NewValue);
 public record OrderItemDto(Guid ProductId, string Name, decimal Price, int Quantity);
 
 /// <summary>Сессия пользователя: роль client / operator / courier и связанная запись.</summary>
-public record Session(string Role, Guid? RefId, string Name);
+public record Session(string Role, Guid? RefId, string Name, Guid? UserId = null);
 
 public class Delivery
 {
@@ -57,4 +63,5 @@ public class Delivery
     public List<OrderItemDto> Items { get; } = new();
     public List<StatusChange> History { get; } = new();
     public List<OrderStatusChange> OrderHistory { get; } = new();
+    public List<OrderChange> Changes { get; } = new();
 }

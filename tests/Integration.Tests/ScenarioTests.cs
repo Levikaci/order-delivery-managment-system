@@ -1,15 +1,13 @@
 using ApiHost;
 using Contracts;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Integration.Tests;
 
-/// <summary>Сценарии из ТЗ на настоящей SQLite-базе (временный файл на каждый тест).</summary>
+/// <summary>Сценарии из ТЗ на настоящем PostgreSQL (отдельная база на каждый тест).</summary>
 public class ScenarioTests : IDisposable
 {
-    private readonly string _db = Path.Combine(Path.GetTempPath(), $"t-{Guid.NewGuid():N}.db");
+    private readonly TestDb _db = new();
     private readonly Store _s;
     private readonly Guid _ivan, _maria;
     private readonly Product _pizza, _juice;
@@ -17,15 +15,14 @@ public class ScenarioTests : IDisposable
 
     public ScenarioTests()
     {
-        var cfg = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:Default"] = $"Data Source={_db};Pooling=False" }).Build();
-        _s = new Store(cfg, NullLogger<Store>.Instance);
+        _s = _db.OpenStore();
         _ivan = _s.Customers().First(c => c.Name.StartsWith("Иван")).Id;
         _maria = _s.Customers().First(c => c.Name.StartsWith("Мария")).Id;
         _pizza = _s.Products().First(p => p.Name.Contains("Пицца"));
         _juice = _s.Products().First(p => p.Name.Contains("Сок"));
     }
 
-    public void Dispose() { foreach (var f in Directory.GetFiles(Path.GetTempPath(), Path.GetFileName(_db) + "*")) try { File.Delete(f); } catch { } }
+    public void Dispose() { _s.Dispose(); _db.Dispose(); }
 
     private CreateOrderRequest Req(Guid? customer = null, int qty = 2) =>
         new(customer ?? _ivan, new() { new(_pizza.Id, qty), new(_juice.Id, 1) }, Addr);
@@ -133,8 +130,35 @@ public class ScenarioTests : IDisposable
         var x = _s.Delivery(d.DeliveryId)!;
         Assert.Equal("Клиент не отвечает", x.FailureReason);
         Assert.NotNull(x.FinishedAt);
-        Assert.Equal(OrderStatus.Cancelled, x.OrderStatus);
+        Assert.Equal(OrderStatus.DeliveryFailed, x.OrderStatus);
         Assert.Equal(CourierState.Available, _s.Couriers().First(c => c.Id == cid).State);
+    }
+
+    [Fact]
+    public void Cancel_SetsOrderCancelled_NotDeliveryFailed_AndFreesCourier()
+    {
+        var d = Create(); var cid = d.CourierId!.Value;
+        Assert.Null(_s.ChangeStatus(d.DeliveryId, DeliveryStatus.Cancelled, null, Client(_ivan)));
+        var x = _s.Delivery(d.DeliveryId)!;
+        Assert.Equal(DeliveryStatus.Cancelled, x.Status);
+        Assert.Equal(OrderStatus.Cancelled, x.OrderStatus);
+        Assert.Null(x.FailureReason);
+        Assert.Equal(CourierState.Available, _s.Couriers().First(c => c.Id == cid).State);
+        Assert.Equal(new[] { OrderStatus.Created, OrderStatus.Confirmed, OrderStatus.Cancelled }, x.OrderHistory.Select(h => h.Status));
+    }
+
+    [Fact]
+    public void FailedDelivery_HistoryKeepsDeliveryFailed_AndNoFurtherTransitions()
+    {
+        var d = Create(); var cid = d.CourierId!.Value;
+        _s.ChangeStatus(d.DeliveryId, DeliveryStatus.Accepted, null, Courier(cid));
+        _s.ChangeStatus(d.DeliveryId, DeliveryStatus.InTransit, null, Courier(cid));
+        Assert.Null(_s.ChangeStatus(d.DeliveryId, DeliveryStatus.Failed, "Никого нет дома", Courier(cid)));
+        var x = _s.Delivery(d.DeliveryId)!;
+        Assert.Equal(OrderStatus.DeliveryFailed, x.OrderStatus);
+        Assert.Equal(OrderStatus.DeliveryFailed, x.OrderHistory.Last().Status);
+        Assert.Equal("DELIVERY_ALREADY_COMPLETED", _s.ChangeStatus(d.DeliveryId, DeliveryStatus.Delivered, null, Op));
+        Assert.Equal("DELIVERY_ALREADY_COMPLETED", _s.ChangeStatus(d.DeliveryId, DeliveryStatus.Cancelled, null, Op));
     }
 
     // ---- роли ----

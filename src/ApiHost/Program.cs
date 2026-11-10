@@ -10,6 +10,7 @@ builder.Services.AddSingleton<Store>();
 builder.Services.AddSingleton<AuthService>();
 
 var app = builder.Build();
+app.Services.GetRequiredService<Store>(); // применить миграции при старте: при ошибке приложение не запускается с повреждённой схемой
 
 // Единый формат ошибок (ErrorResponse из ТЗ): { success:false, errorCode, message }.
 var messages = new Dictionary<string, string>
@@ -42,6 +43,8 @@ var messages = new Dictionary<string, string>
     ["UNAUTHORIZED_STATUS_CHANGE"] = "Вы не можете изменить этот статус (отмена возможна только до передачи в доставку)",
     ["FAILURE_REASON_REQUIRED"] = "Укажите причину, по которой доставка не выполнена",
     ["ORDER_NOT_EDITABLE"] = "Заказ нельзя изменить после принятия курьером",
+    ["STORAGE_ERROR"] = "Временная ошибка хранилища данных. Повторите запрос позже",
+    ["INTERNAL_ERROR"] = "Внутренняя ошибка сервера",
 };
 
 IResult Err(string code)
@@ -50,6 +53,7 @@ IResult Err(string code)
     {
         "UNAUTHORIZED" or "INVALID_CREDENTIALS" => 401,
         "FORBIDDEN" or "UNAUTHORIZED_STATUS_CHANGE" => 403,
+        "STORAGE_ERROR" or "INTERNAL_ERROR" => 500,
         _ when code.EndsWith("NOT_FOUND") => 404,
         _ when code.EndsWith("HAS_ORDERS") || code.StartsWith("DELIVERY_ALREADY") || code is "COURIER_NOT_AVAILABLE" or "COURIER_BUSY"
             or "INVALID_STATUS_TRANSITION" or "ORDER_NOT_EDITABLE" or "LOGIN_TAKEN" => 409,
@@ -57,6 +61,20 @@ IResult Err(string code)
     };
     return Results.Json(new { success = false, errorCode = code, error = code, message = messages.GetValueOrDefault(code, code) }, statusCode: status);
 }
+
+// Любое необработанное исключение — в едином формате ошибок, без трассировки в ответе.
+app.UseExceptionHandler(h => h.Run(async ctx =>
+{
+    var ex = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+    var code = ex switch
+    {
+        BadHttpRequestException or System.Text.Json.JsonException => "INVALID_REQUEST",
+        System.Data.Common.DbException or TimeoutException => "STORAGE_ERROR",
+        _ => "INTERNAL_ERROR"
+    };
+    if (code != "INVALID_REQUEST") ctx.RequestServices.GetRequiredService<ILogger<Program>>().LogError(ex, "Необработанная ошибка запроса {Path}", ctx.Request.Path);
+    await Err(code).ExecuteAsync(ctx);
+}));
 
 // Фильтр доступа: пустой список ролей = любой вошедший пользователь.
 RouteHandlerBuilder Roles(RouteHandlerBuilder b, params string[] roles) => b.AddEndpointFilter(async (ctx, next) =>
@@ -137,7 +155,7 @@ Roles(api.MapPost("/orders", (HttpContext h, Store s, CreateOrderRequest r) =>
     var me = Me(h);
     if (r is null) return Err("INVALID_REQUEST");
     if (me.RefId != r.CustomerId) return Err("FORBIDDEN");
-    var (d, assigned, e) = s.CreateOrder(r);
+    var (d, assigned, e) = s.CreateOrder(r, me);
     return d is null ? Err(e!) : Results.Ok(new
     {
         orderId = d.OrderId,
@@ -153,12 +171,14 @@ Roles(api.MapGet("/orders/{id:guid}", (HttpContext h, Store s, Guid id) =>
     s.Order(id) is not { } d ? Err("ORDER_NOT_FOUND") : !Own(Me(h), d.CustomerId) && !(Me(h).Role == "courier" && d.CourierId == Me(h).RefId) ? Err("FORBIDDEN") : Results.Ok(d)));
 Roles(api.MapPut("/orders/{id:guid}", (HttpContext h, Store s, Guid id, UpdateOrderRequest r) =>
     s.Order(id) is not { } d ? Err("ORDER_NOT_FOUND") : !Own(Me(h), d.CustomerId) ? Err("FORBIDDEN")
-    : s.UpdateOrder(id, r) is { } e ? Err(e) : Results.Ok()), "operator", "client");
+    : s.UpdateOrder(id, r, Me(h)) is { } e ? Err(e) : Results.Ok()), "operator", "client");
+Roles(api.MapGet("/orders/{id:guid}/changes", (HttpContext h, Store s, Guid id) =>
+    s.Order(id) is not { } d ? Err("ORDER_NOT_FOUND") : !Own(Me(h), d.CustomerId) ? Err("FORBIDDEN") : Results.Ok(d.Changes)), "operator", "client");
 
 // --- доставки ---
-Roles(api.MapPost("/deliveries", (Store s, CreateDeliveryBody b) =>
+Roles(api.MapPost("/deliveries", (HttpContext h, Store s, CreateDeliveryBody b) =>
 {
-    var (d, e) = s.CreateDelivery(b.OrderId);
+    var (d, e) = s.CreateDelivery(b.OrderId, Me(h));
     return e is null ? Results.Ok(new { deliveryId = d!.DeliveryId, orderId = d.OrderId, status = d.Status })
         : e == "DELIVERY_ALREADY_EXISTS" ? Results.Json(new { success = false, errorCode = e, error = e, message = messages[e], deliveryId = d!.DeliveryId }, statusCode: 409) : Err(e);
 }), "operator");
@@ -172,8 +192,8 @@ Roles(api.MapGet("/deliveries", (HttpContext h, Store s, string? q, DeliveryStat
 Roles(api.MapGet("/deliveries/{id:guid}", (HttpContext h, Store s, Guid id) =>
     s.Delivery(id) is not { } d ? Err("DELIVERY_NOT_FOUND")
     : !Own(Me(h), d.CustomerId) && !(Me(h).Role == "courier" && d.CourierId == Me(h).RefId) ? Err("FORBIDDEN") : Results.Ok(d)));
-Roles(api.MapPost("/deliveries/{id:guid}/assign", (Store s, Guid id, AssignRequest? r) =>
-    s.Assign(id, r?.CourierId) is { } e ? Err(e) : Results.Ok(new { deliveryId = id, courierId = s.Delivery(id)!.CourierId, status = DeliveryStatus.Assigned })), "operator");
+Roles(api.MapPost("/deliveries/{id:guid}/assign", (HttpContext h, Store s, Guid id, AssignRequest? r) =>
+    s.Assign(id, r?.CourierId, Me(h)) is { } e ? Err(e) : Results.Ok(new { deliveryId = id, courierId = s.Delivery(id)!.CourierId, status = DeliveryStatus.Assigned })), "operator");
 Roles(api.MapPatch("/deliveries/{id:guid}/status", (HttpContext h, Store s, Guid id, StatusRequest r) =>
 {
     var before = s.Delivery(id)?.Status;

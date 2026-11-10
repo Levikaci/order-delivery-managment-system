@@ -1,44 +1,43 @@
-using System.Globalization;
+using System.Data.Common;
 using System.Security.Cryptography;
+using ApiHost.Db;
 using CourierModule;
 using CustomerModule;
 using DeliveryModule;
-using Microsoft.Data.Sqlite;
+using Npgsql;
 using OrderModule;
 
 namespace ApiHost;
 
 /// <summary>
-/// Хранилище на SQLite и сценарии работы системы. Бизнес-правила берутся из модулей
-/// (DeliveryRules, OrderRules, CourierRules, CustomerRules), здесь они применяются к данным.
+/// Хранилище на PostgreSQL и сценарии работы системы. Бизнес-правила берутся из модулей
+/// (DeliveryRules, OrderRules, CourierRules, CustomerRules, Money), здесь они применяются к данным.
+/// Согласованность обеспечивают транзакции и построчные блокировки (SELECT ... FOR UPDATE), а не блокировка процесса.
 /// </summary>
-public class Store
+public class Store : IDisposable
 {
-    private const int SchemaVersion = 2;
-    private readonly string _cs;
-    private readonly object _lock = new();
+    private const string PgUniqueViolation = "23505";
+    private const string PgForeignKeyViolation = "23503";
+
+    private readonly NpgsqlDataSource _ds;
     private readonly ILogger<Store> _log;
 
     public Store(IConfiguration cfg, ILogger<Store> log)
     {
         _log = log;
-        _cs = cfg.GetConnectionString("Default") ?? "Data Source=data/delivery.db";
-        var path = new SqliteConnectionStringBuilder(_cs).DataSource;
-        var dir = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        Init();
+        var cs = cfg.GetConnectionString("Default")
+                 ?? "Host=localhost;Port=5432;Database=delivery;Username=delivery;Password=delivery";
+        _ds = NpgsqlDataSource.Create(cs);
+        Migrator.Apply(_ds, Migrations.All, log: log);
+        SeedIfEmpty();
     }
+
+    public void Dispose() => _ds.Dispose();
 
     // ---------- инфраструктура ----------
-    private SqliteConnection Open()
-    {
-        var c = new SqliteConnection(_cs);
-        c.Open();
-        Cmd(c, "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;").ExecuteNonQuery();
-        return c;
-    }
+    private NpgsqlConnection Open() => _ds.OpenConnection();
 
-    private static SqliteCommand Cmd(SqliteConnection c, string sql, params (string, object?)[] ps)
+    private static NpgsqlCommand Cmd(NpgsqlConnection c, string sql, params (string, object?)[] ps)
     {
         var cmd = c.CreateCommand();
         cmd.CommandText = sql;
@@ -46,62 +45,22 @@ public class Store
         return cmd;
     }
 
-    private static long Count(SqliteConnection c, string sql, params (string, object?)[] ps) => (long)Cmd(c, sql, ps).ExecuteScalar()!;
-    private static string Now() => DateTime.UtcNow.ToString("o");
-    private static DateTime Dt(string s) => DateTime.Parse(s, null, DateTimeStyles.RoundtripKind);
-    private static DateTime? DtN(SqliteDataReader r, int i) => r.IsDBNull(i) ? null : Dt(r.GetString(i));
-    private static string? Str(SqliteDataReader r, int i) => r.IsDBNull(i) ? null : r.GetString(i);
+    private static long Count(NpgsqlConnection c, string sql, params (string, object?)[] ps) => (long)Cmd(c, sql, ps).ExecuteScalar()!;
+    private static DateTime Now() => DateTime.UtcNow;
+    private static DateTime? DtN(NpgsqlDataReader r, int i) => r.IsDBNull(i) ? null : r.GetDateTime(i);
+    private static string? Str(NpgsqlDataReader r, int i) => r.IsDBNull(i) ? null : r.GetString(i);
+    private static Guid? GuidN(NpgsqlDataReader r, int i) => r.IsDBNull(i) ? null : r.GetGuid(i);
+    private static bool IsPg(Exception e, string state) => e is PostgresException p && p.SqlState == state;
 
-    private void Init()
+    private void SeedIfEmpty()
     {
         using var c = Open();
-        var ver = (long)Cmd(c, "PRAGMA user_version").ExecuteScalar()!;
-        if (ver < SchemaVersion)
-        {
-            // Схема v1 (до доработки по ТЗ) несовместима: пересоздаём таблицы.
-            Cmd(c, @"PRAGMA foreign_keys=OFF;
-DROP TABLE IF EXISTS order_history; DROP TABLE IF EXISTS status_history; DROP TABLE IF EXISTS order_items;
-DROP TABLE IF EXISTS deliveries; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS customer_addresses;
-DROP TABLE IF EXISTS users; DROP TABLE IF EXISTS products; DROP TABLE IF EXISTS couriers; DROP TABLE IF EXISTS customers;
-PRAGMA foreign_keys=ON;").ExecuteNonQuery();
-        }
-        Cmd(c, @"
-CREATE TABLE IF NOT EXISTS customers(id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS customer_addresses(
-  id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  label TEXT NOT NULL DEFAULT '', city TEXT NOT NULL, street TEXT NOT NULL, house TEXT NOT NULL, apartment TEXT NULL);
-CREATE TABLE IF NOT EXISTS couriers(id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'Available');
-CREATE TABLE IF NOT EXISTS products(id TEXT PRIMARY KEY, name TEXT NOT NULL, price REAL NOT NULL);
-CREATE TABLE IF NOT EXISTS users(
-  id TEXT PRIMARY KEY, login TEXT NOT NULL UNIQUE COLLATE NOCASE, salt BLOB NOT NULL, hash BLOB NOT NULL,
-  role TEXT NOT NULL, ref_id TEXT NULL);
-CREATE TABLE IF NOT EXISTS orders(
-  id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id),
-  address TEXT NOT NULL, comment TEXT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS order_items(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-  product_id TEXT NOT NULL, name TEXT NOT NULL, price REAL NOT NULL, quantity INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS deliveries(
-  id TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE REFERENCES orders(id),
-  courier_id TEXT NULL REFERENCES couriers(id), status TEXT NOT NULL, created_at TEXT NOT NULL,
-  started_at TEXT NULL, finished_at TEXT NULL, failure_reason TEXT NULL, confirmed_at TEXT NULL);
-CREATE TABLE IF NOT EXISTS status_history(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, delivery_id TEXT NOT NULL REFERENCES deliveries(id),
-  status TEXT NOT NULL, at TEXT NOT NULL, comment TEXT NULL);
-CREATE TABLE IF NOT EXISTS order_history(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL REFERENCES orders(id),
-  status TEXT NOT NULL, at TEXT NOT NULL, comment TEXT NULL);
-CREATE INDEX IF NOT EXISTS ix_deliveries_status ON deliveries(status);
-CREATE INDEX IF NOT EXISTS ix_deliveries_courier ON deliveries(courier_id);
-CREATE INDEX IF NOT EXISTS ix_orders_customer ON orders(customer_id);
-CREATE INDEX IF NOT EXISTS ix_history_delivery ON status_history(delivery_id);
-CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").ExecuteNonQuery();
-        Cmd(c, $"PRAGMA user_version={SchemaVersion}").ExecuteNonQuery();
-
-        if (Count(c, "SELECT COUNT(*) FROM users") == 0) Seed(c);
+        using var tx = c.BeginTransaction();
+        Cmd(c, "SELECT pg_advisory_xact_lock(7272002)").ExecuteNonQuery(); // два экземпляра API не засеют базу дважды
+        if (Count(c, "SELECT COUNT(*) FROM users") == 0) { Seed(c); tx.Commit(); }
     }
 
-    private void Seed(SqliteConnection c)
+    private void Seed(NpgsqlConnection c)
     {
         AddUser(c, "operator", "operator", "operator", null);
         var ivan = AddCustomer(c, "Иван Петров", "+7 900 111-22-33");
@@ -117,41 +76,41 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
         }
         foreach (var (n, p) in new[] { ("Пицца Маргарита", 590m), ("Бургер классический", 420m), ("Картофель фри", 190m), ("Сок апельсиновый", 150m), ("Суши-сет", 1290m), ("Букет роз", 2500m), ("Книга", 800m), ("Кофе", 220m) })
             AddProduct(c, n, p);
-        _log.LogInformation("База данных создана, добавлены тестовые данные");
+        _log.LogInformation("База данных пуста: добавлены тестовые данные");
     }
 
     // ---------- пользователи и вход ----------
     private static byte[] Hash(string password, byte[] salt) =>
         Rfc2898DeriveBytes.Pbkdf2(password, salt, 100_000, HashAlgorithmName.SHA256, 32);
 
-    private static void AddUser(SqliteConnection c, string login, string password, string role, Guid? refId)
+    private static void AddUser(NpgsqlConnection c, string login, string password, string role, Guid? refId)
     {
         var salt = RandomNumberGenerator.GetBytes(16);
-        Cmd(c, "INSERT INTO users(id,login,salt,hash,role,ref_id) VALUES($i,$l,$s,$h,$r,$f)",
-            ("$i", Guid.NewGuid().ToString()), ("$l", login), ("$s", salt), ("$h", Hash(password, salt)), ("$r", role), ("$f", refId?.ToString())).ExecuteNonQuery();
+        Cmd(c, "INSERT INTO users(id,login,salt,hash,role,ref_id) VALUES(@i,@l,@s,@h,@r,@f)",
+            ("i", Guid.NewGuid()), ("l", login), ("s", salt), ("h", Hash(password, salt)), ("r", role), ("f", refId)).ExecuteNonQuery();
     }
 
     public Session? Authenticate(string? login, string? password)
     {
         if (string.IsNullOrWhiteSpace(login) || password is null) return null;
         using var c = Open();
-        using var r = Cmd(c, "SELECT salt,hash,role,ref_id FROM users WHERE login=$l", ("$l", login.Trim())).ExecuteReader();
-        if (!r.Read()) return null;
-        var salt = (byte[])r["salt"]; var hash = (byte[])r["hash"];
+        byte[] salt, hash; string role; Guid? refId; Guid userId;
+        using (var r = Cmd(c, "SELECT salt,hash,role,ref_id,id FROM users WHERE lower(login)=lower(@l)", ("l", login.Trim())).ExecuteReader())
+        {
+            if (!r.Read()) return null;
+            salt = (byte[])r["salt"]; hash = (byte[])r["hash"]; role = r.GetString(2); refId = GuidN(r, 3); userId = r.GetGuid(4);
+        }
         if (!CryptographicOperations.FixedTimeEquals(hash, Hash(password, salt))) return null;
-        var role = r.GetString(2);
-        Guid? refId = r.IsDBNull(3) ? null : Guid.Parse(r.GetString(3));
-        r.Close();
         var name = role switch
         {
-            "client" => Cmd(c, "SELECT name FROM customers WHERE id=$i", ("$i", refId.ToString())).ExecuteScalar() as string,
-            "courier" => Cmd(c, "SELECT name FROM couriers WHERE id=$i", ("$i", refId.ToString())).ExecuteScalar() as string,
+            "client" => Cmd(c, "SELECT name FROM customers WHERE id=@i", ("i", refId)).ExecuteScalar() as string,
+            "courier" => Cmd(c, "SELECT name FROM couriers WHERE id=@i", ("i", refId)).ExecuteScalar() as string,
             _ => "Оператор"
         };
-        return new Session(role, refId, name ?? login);
+        return new Session(role, refId, name ?? login, userId);
     }
 
-    private static (string login, string password) NewCredentials(SqliteConnection c, string? login, string? password, string prefix)
+    private static (string login, string password) NewCredentials(string? login, string? password, string prefix)
     {
         login = string.IsNullOrWhiteSpace(login) ? $"{prefix}{RandomNumberGenerator.GetInt32(1000, 9999)}" : login.Trim();
         password = string.IsNullOrWhiteSpace(password) ? RandomNumberGenerator.GetInt32(100000, 999999).ToString() : password;
@@ -159,79 +118,79 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
     }
 
     // ---------- клиенты ----------
-    private static Guid AddCustomer(SqliteConnection c, string name, string? phone)
+    private static Guid AddCustomer(NpgsqlConnection c, string name, string? phone)
     {
         var id = Guid.NewGuid();
-        Cmd(c, "INSERT INTO customers(id,name,phone) VALUES($i,$n,$p)", ("$i", id.ToString()), ("$n", name), ("$p", phone ?? "")).ExecuteNonQuery();
+        Cmd(c, "INSERT INTO customers(id,name,phone) VALUES(@i,@n,@p)", ("i", id), ("n", name), ("p", phone ?? "")).ExecuteNonQuery();
         return id;
     }
 
     public (object? created, string? error) NewCustomer(NewPerson p)
     {
         if (CustomerRules.ValidateName(p.Name) is { } e) return (null, e);
-        lock (_lock)
+        using var c = Open();
+        var (login, pwd) = NewCredentials(p.Login, p.Password, "client");
+        try
         {
-            using var c = Open();
-            var (login, pwd) = NewCredentials(c, p.Login, p.Password, "client");
-            if (Count(c, "SELECT COUNT(*) FROM users WHERE login=$l", ("$l", login)) > 0) return (null, "LOGIN_TAKEN");
             using var tx = c.BeginTransaction();
             var id = AddCustomer(c, p.Name.Trim(), p.Phone);
             AddUser(c, login, pwd, "client", id);
             tx.Commit();
             return (new { id, name = p.Name.Trim(), phone = p.Phone ?? "", login, password = pwd }, null);
         }
+        catch (Exception ex) when (IsPg(ex, PgUniqueViolation)) { return (null, "LOGIN_TAKEN"); }
     }
 
     public string? UpdateCustomer(Guid id, NewPerson p)
     {
         if (CustomerRules.ValidateName(p.Name) is { } e) return e;
-        lock (_lock)
-        {
-            using var c = Open();
-            return Cmd(c, "UPDATE customers SET name=$n,phone=$p WHERE id=$i", ("$n", p.Name.Trim()), ("$p", p.Phone ?? ""), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "CUSTOMER_NOT_FOUND" : null;
-        }
+        using var c = Open();
+        return Cmd(c, "UPDATE customers SET name=@n,phone=@p WHERE id=@i", ("n", p.Name.Trim()), ("p", p.Phone ?? ""), ("i", id)).ExecuteNonQuery() == 0 ? "CUSTOMER_NOT_FOUND" : null;
     }
 
     public string? DeleteCustomer(Guid id)
     {
-        lock (_lock)
+        using var c = Open();
+        try
         {
-            using var c = Open();
-            if (Count(c, "SELECT COUNT(*) FROM orders WHERE customer_id=$i", ("$i", id.ToString())) > 0) return "CUSTOMER_HAS_ORDERS";
             using var tx = c.BeginTransaction();
-            Cmd(c, "DELETE FROM users WHERE ref_id=$i AND role='client'", ("$i", id.ToString())).ExecuteNonQuery();
-            var n = Cmd(c, "DELETE FROM customers WHERE id=$i", ("$i", id.ToString())).ExecuteNonQuery();
+            if (Count(c, "SELECT COUNT(*) FROM orders WHERE customer_id=@i", ("i", id)) > 0) return "CUSTOMER_HAS_ORDERS";
+            Cmd(c, "DELETE FROM users WHERE ref_id=@i AND role='client'", ("i", id)).ExecuteNonQuery();
+            var n = Cmd(c, "DELETE FROM customers WHERE id=@i", ("i", id)).ExecuteNonQuery();
+            if (n == 0) return "CUSTOMER_NOT_FOUND";
             tx.Commit();
-            return n == 0 ? "CUSTOMER_NOT_FOUND" : null;
+            return null;
         }
+        catch (Exception ex) when (IsPg(ex, PgForeignKeyViolation)) { return "CUSTOMER_HAS_ORDERS"; }
     }
 
     public List<Customer> Customers() { using var c = Open(); return Customers(c); }
-    private static List<Customer> Customers(SqliteConnection c)
+    private static List<Customer> Customers(NpgsqlConnection c)
     {
         using var r = Cmd(c, "SELECT id,name,phone FROM customers ORDER BY name").ExecuteReader();
         var l = new List<Customer>();
-        while (r.Read()) l.Add(new Customer(Guid.Parse(r.GetString(0)), r.GetString(1), r.GetString(2)));
+        while (r.Read()) l.Add(new Customer(r.GetGuid(0), r.GetString(1), r.GetString(2)));
         return l;
     }
     public Customer? Customer(Guid id) => Customers().FirstOrDefault(x => x.Id == id);
 
     // ---------- адреса клиента ----------
-    private static Guid AddAddr(SqliteConnection c, Guid customerId, string label, string city, string street, string house, string? apt)
+    private static Guid AddAddr(NpgsqlConnection c, Guid customerId, string label, string city, string street, string house, string? apt)
     {
         var id = Guid.NewGuid();
-        Cmd(c, "INSERT INTO customer_addresses(id,customer_id,label,city,street,house,apartment) VALUES($i,$c,$l,$ci,$s,$h,$a)",
-            ("$i", id.ToString()), ("$c", customerId.ToString()), ("$l", label), ("$ci", city.Trim()), ("$s", street.Trim()), ("$h", house.Trim()),
-            ("$a", string.IsNullOrWhiteSpace(apt) ? null : apt.Trim())).ExecuteNonQuery();
+        Cmd(c, "INSERT INTO customer_addresses(id,customer_id,label,city,street,house,apartment) VALUES(@i,@c,@l,@ci,@s,@h,@a)",
+            ("i", id), ("c", customerId), ("l", label), ("ci", city.Trim()), ("s", street.Trim()), ("h", house.Trim()),
+            ("a", string.IsNullOrWhiteSpace(apt) ? null : apt.Trim())).ExecuteNonQuery();
         return id;
     }
 
-    private static List<SavedAddress> Addresses(SqliteConnection c, Guid? customerId = null)
+    private static List<SavedAddress> Addresses(NpgsqlConnection c, Guid? customerId = null)
     {
-        using var r = Cmd(c, "SELECT id,customer_id,label,city,street,house,apartment FROM customer_addresses" + (customerId is null ? "" : " WHERE customer_id=$c") + " ORDER BY label,street",
-            customerId is null ? Array.Empty<(string, object?)>() : new (string, object?)[] { ("$c", customerId.ToString()) }).ExecuteReader();
+        using var r = Cmd(c, "SELECT id,customer_id,label,city,street,house,apartment FROM customer_addresses"
+            + (customerId is null ? "" : " WHERE customer_id=@c") + " ORDER BY label,street",
+            customerId is null ? Array.Empty<(string, object?)>() : new (string, object?)[] { ("c", customerId) }).ExecuteReader();
         var l = new List<SavedAddress>();
-        while (r.Read()) l.Add(new SavedAddress(Guid.Parse(r.GetString(0)), Guid.Parse(r.GetString(1)), r.GetString(2), r.GetString(3), r.GetString(4), r.GetString(5), Str(r, 6)));
+        while (r.Read()) l.Add(new SavedAddress(r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetString(3), r.GetString(4), r.GetString(5), Str(r, 6)));
         return l;
     }
 
@@ -241,147 +200,135 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
     public (SavedAddress? a, string? error) AddAddress(Guid customerId, AddressRequest r)
     {
         if (CustomerRules.ValidateAddress(r.City, r.Street, r.House) is { } e) return (null, e);
-        lock (_lock)
-        {
-            using var c = Open();
-            if (Count(c, "SELECT COUNT(*) FROM customers WHERE id=$i", ("$i", customerId.ToString())) == 0) return (null, "CUSTOMER_NOT_FOUND");
-            var id = AddAddr(c, customerId, r.Label?.Trim() ?? "", r.City, r.Street, r.House, r.Apartment);
-            return (Addresses(c, customerId).First(a => a.Id == id), null);
-        }
+        using var c = Open();
+        if (Count(c, "SELECT COUNT(*) FROM customers WHERE id=@i", ("i", customerId)) == 0) return (null, "CUSTOMER_NOT_FOUND");
+        var id = AddAddr(c, customerId, r.Label?.Trim() ?? "", r.City, r.Street, r.House, r.Apartment);
+        return (Addresses(c, customerId).First(a => a.Id == id), null);
     }
 
     public string? UpdateAddress(Guid id, AddressRequest r)
     {
         if (CustomerRules.ValidateAddress(r.City, r.Street, r.House) is { } e) return e;
-        lock (_lock)
-        {
-            using var c = Open();
-            return Cmd(c, "UPDATE customer_addresses SET label=$l,city=$c,street=$s,house=$h,apartment=$a WHERE id=$i",
-                ("$l", r.Label?.Trim() ?? ""), ("$c", r.City.Trim()), ("$s", r.Street.Trim()), ("$h", r.House.Trim()),
-                ("$a", string.IsNullOrWhiteSpace(r.Apartment) ? null : r.Apartment.Trim()), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "ADDRESS_NOT_FOUND" : null;
-        }
+        using var c = Open();
+        return Cmd(c, "UPDATE customer_addresses SET label=@l,city=@c,street=@s,house=@h,apartment=@a WHERE id=@i",
+            ("l", r.Label?.Trim() ?? ""), ("c", r.City.Trim()), ("s", r.Street.Trim()), ("h", r.House.Trim()),
+            ("a", string.IsNullOrWhiteSpace(r.Apartment) ? null : r.Apartment.Trim()), ("i", id)).ExecuteNonQuery() == 0 ? "ADDRESS_NOT_FOUND" : null;
     }
 
     public string? DeleteAddress(Guid id)
     {
-        lock (_lock)
-        {
-            using var c = Open();
-            return Cmd(c, "DELETE FROM customer_addresses WHERE id=$i", ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "ADDRESS_NOT_FOUND" : null;
-        }
+        using var c = Open();
+        return Cmd(c, "DELETE FROM customer_addresses WHERE id=@i", ("i", id)).ExecuteNonQuery() == 0 ? "ADDRESS_NOT_FOUND" : null;
     }
 
     // ---------- курьеры ----------
-    private static Guid AddCourier(SqliteConnection c, string name, string? phone)
+    private static Guid AddCourier(NpgsqlConnection c, string name, string? phone)
     {
         var id = Guid.NewGuid();
-        Cmd(c, "INSERT INTO couriers(id,name,phone,state) VALUES($i,$n,$p,'Available')", ("$i", id.ToString()), ("$n", name), ("$p", phone ?? "")).ExecuteNonQuery();
+        Cmd(c, "INSERT INTO couriers(id,name,phone,state) VALUES(@i,@n,@p,'Available')", ("i", id), ("n", name), ("p", phone ?? "")).ExecuteNonQuery();
         return id;
     }
 
     public (object? created, string? error) NewCourier(NewPerson p)
     {
         if (CustomerRules.ValidateName(p.Name) is { } e) return (null, e);
-        lock (_lock)
+        using var c = Open();
+        var (login, pwd) = NewCredentials(p.Login, p.Password, "courier");
+        try
         {
-            using var c = Open();
-            var (login, pwd) = NewCredentials(c, p.Login, p.Password, "courier");
-            if (Count(c, "SELECT COUNT(*) FROM users WHERE login=$l", ("$l", login)) > 0) return (null, "LOGIN_TAKEN");
             using var tx = c.BeginTransaction();
             var id = AddCourier(c, p.Name.Trim(), p.Phone);
             AddUser(c, login, pwd, "courier", id);
             tx.Commit();
             return (new { id, name = p.Name.Trim(), phone = p.Phone ?? "", state = CourierState.Available, available = true, login, password = pwd }, null);
         }
+        catch (Exception ex) when (IsPg(ex, PgUniqueViolation)) { return (null, "LOGIN_TAKEN"); }
     }
 
     public string? UpdateCourier(Guid id, NewPerson p)
     {
         if (CustomerRules.ValidateName(p.Name) is { } e) return e;
-        lock (_lock)
-        {
-            using var c = Open();
-            return Cmd(c, "UPDATE couriers SET name=$n,phone=$p WHERE id=$i", ("$n", p.Name.Trim()), ("$p", p.Phone ?? ""), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "COURIER_NOT_FOUND" : null;
-        }
+        using var c = Open();
+        return Cmd(c, "UPDATE couriers SET name=@n,phone=@p WHERE id=@i", ("n", p.Name.Trim()), ("p", p.Phone ?? ""), ("i", id)).ExecuteNonQuery() == 0 ? "COURIER_NOT_FOUND" : null;
     }
 
     public string? DeleteCourier(Guid id)
     {
-        lock (_lock)
+        using var c = Open();
+        try
         {
-            using var c = Open();
-            if (Count(c, "SELECT COUNT(*) FROM deliveries WHERE courier_id=$i", ("$i", id.ToString())) > 0) return "COURIER_HAS_ORDERS";
             using var tx = c.BeginTransaction();
-            Cmd(c, "DELETE FROM users WHERE ref_id=$i AND role='courier'", ("$i", id.ToString())).ExecuteNonQuery();
-            var n = Cmd(c, "DELETE FROM couriers WHERE id=$i", ("$i", id.ToString())).ExecuteNonQuery();
+            if (Count(c, "SELECT COUNT(*) FROM deliveries WHERE courier_id=@i", ("i", id)) > 0) return "COURIER_HAS_ORDERS";
+            Cmd(c, "DELETE FROM users WHERE ref_id=@i AND role='courier'", ("i", id)).ExecuteNonQuery();
+            var n = Cmd(c, "DELETE FROM couriers WHERE id=@i", ("i", id)).ExecuteNonQuery();
+            if (n == 0) return "COURIER_NOT_FOUND";
             tx.Commit();
-            return n == 0 ? "COURIER_NOT_FOUND" : null;
+            return null;
         }
+        catch (Exception ex) when (IsPg(ex, PgForeignKeyViolation)) { return "COURIER_HAS_ORDERS"; }
     }
 
     public List<Courier> Couriers(bool onlyAvailable = false) { using var c = Open(); return Couriers(c, onlyAvailable); }
-    private static List<Courier> Couriers(SqliteConnection c, bool onlyAvailable = false)
+    private static List<Courier> Couriers(NpgsqlConnection c, bool onlyAvailable = false)
     {
         using var r = Cmd(c, "SELECT id,name,phone,state FROM couriers" + (onlyAvailable ? " WHERE state='Available'" : "") + " ORDER BY name").ExecuteReader();
         var l = new List<Courier>();
-        while (r.Read()) l.Add(new Courier(Guid.Parse(r.GetString(0)), r.GetString(1), r.GetString(2), Enum.Parse<CourierState>(r.GetString(3))));
+        while (r.Read()) l.Add(new Courier(r.GetGuid(0), r.GetString(1), r.GetString(2), Enum.Parse<CourierState>(r.GetString(3))));
         return l;
     }
 
     public string? SetCourierState(Guid id, CourierState state, bool byOperator)
     {
-        lock (_lock)
-        {
-            using var c = Open();
-            var cur = Couriers(c).FirstOrDefault(x => x.Id == id);
-            if (cur is null) return "COURIER_NOT_FOUND";
-            if (CourierRules.ValidateStateChange(cur.State, state, byOperator) is { } e) return e;
-            Cmd(c, "UPDATE couriers SET state=$s WHERE id=$i", ("$s", state.ToString()), ("$i", id.ToString())).ExecuteNonQuery();
-            _log.LogInformation("Курьер {Courier}: состояние {From} → {To}", id, cur.State, state);
-            return null;
-        }
+        using var c = Open();
+        using var tx = c.BeginTransaction();
+        var cur = Cmd(c, "SELECT state FROM couriers WHERE id=@i FOR UPDATE", ("i", id)).ExecuteScalar() as string;
+        if (cur is null) return "COURIER_NOT_FOUND";
+        var from = Enum.Parse<CourierState>(cur);
+        if (CourierRules.ValidateStateChange(from, state, byOperator) is { } e) return e;
+        Cmd(c, "UPDATE couriers SET state=@s WHERE id=@i", ("s", state.ToString()), ("i", id)).ExecuteNonQuery();
+        tx.Commit();
+        _log.LogInformation("Курьер {Courier}: состояние {From} → {To}", id, from, state);
+        return null;
     }
 
-    // ---------- товары ----------
-    private static Guid AddProduct(SqliteConnection c, string name, decimal price)
+    // ---------- товары (цены хранятся в копейках) ----------
+    private static Guid AddProduct(NpgsqlConnection c, string name, decimal price)
     {
         var id = Guid.NewGuid();
-        Cmd(c, "INSERT INTO products(id,name,price) VALUES($i,$n,$p)", ("$i", id.ToString()), ("$n", name), ("$p", (double)price)).ExecuteNonQuery();
+        Cmd(c, "INSERT INTO products(id,name,price_kopecks) VALUES(@i,@n,@p)", ("i", id), ("n", name), ("p", Money.ToKopecks(price))).ExecuteNonQuery();
         return id;
     }
 
     public List<Product> Products() { using var c = Open(); return Products(c); }
-    private static List<Product> Products(SqliteConnection c)
+    private static List<Product> Products(NpgsqlConnection c)
     {
-        using var r = Cmd(c, "SELECT id,name,price FROM products ORDER BY name").ExecuteReader();
+        using var r = Cmd(c, "SELECT id,name,price_kopecks FROM products ORDER BY name").ExecuteReader();
         var l = new List<Product>();
-        while (r.Read()) l.Add(new Product(Guid.Parse(r.GetString(0)), r.GetString(1), (decimal)r.GetDouble(2)));
+        while (r.Read()) l.Add(new Product(r.GetGuid(0), r.GetString(1), Money.FromKopecks(r.GetInt64(2))));
         return l;
     }
 
+    private static bool ValidProduct(ProductRequest r) => !string.IsNullOrWhiteSpace(r.Name) && Money.IsValidPrice(r.Price);
+
     public (Product? p, string? error) NewProduct(ProductRequest r)
     {
-        if (string.IsNullOrWhiteSpace(r.Name) || r.Price < 0 || r.Price > 1_000_000) return (null, "INVALID_PRODUCT");
-        lock (_lock) { using var c = Open(); var id = AddProduct(c, r.Name.Trim(), r.Price); return (new Product(id, r.Name.Trim(), r.Price), null); }
+        if (!ValidProduct(r)) return (null, "INVALID_PRODUCT");
+        using var c = Open();
+        var id = AddProduct(c, r.Name.Trim(), r.Price);
+        return (new Product(id, r.Name.Trim(), Money.FromKopecks(Money.ToKopecks(r.Price))), null);
     }
 
     public string? UpdateProduct(Guid id, ProductRequest r)
     {
-        if (string.IsNullOrWhiteSpace(r.Name) || r.Price < 0 || r.Price > 1_000_000) return "INVALID_PRODUCT";
-        lock (_lock)
-        {
-            using var c = Open();
-            return Cmd(c, "UPDATE products SET name=$n,price=$p WHERE id=$i", ("$n", r.Name.Trim()), ("$p", (double)r.Price), ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "PRODUCT_NOT_FOUND" : null;
-        }
+        if (!ValidProduct(r)) return "INVALID_PRODUCT";
+        using var c = Open();
+        return Cmd(c, "UPDATE products SET name=@n,price_kopecks=@p WHERE id=@i", ("n", r.Name.Trim()), ("p", Money.ToKopecks(r.Price)), ("i", id)).ExecuteNonQuery() == 0 ? "PRODUCT_NOT_FOUND" : null;
     }
 
     public string? DeleteProduct(Guid id)
     {
-        lock (_lock)
-        {
-            using var c = Open();
-            return Cmd(c, "DELETE FROM products WHERE id=$i", ("$i", id.ToString())).ExecuteNonQuery() == 0 ? "PRODUCT_NOT_FOUND" : null;
-        }
+        using var c = Open();
+        return Cmd(c, "DELETE FROM products WHERE id=@i", ("i", id)).ExecuteNonQuery() == 0 ? "PRODUCT_NOT_FOUND" : null;
     }
 
     // ---------- чтение заказов и доставок ----------
@@ -391,7 +338,7 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
         return Deliveries(c, q, status, courierId, customerId);
     }
 
-    private static List<Delivery> Deliveries(SqliteConnection c, string? q = null, DeliveryStatus? status = null, Guid? courierId = null, Guid? customerId = null, Guid? deliveryId = null, Guid? orderId = null)
+    private static List<Delivery> Deliveries(NpgsqlConnection c, string? q = null, DeliveryStatus? status = null, Guid? courierId = null, Guid? customerId = null, Guid? deliveryId = null, Guid? orderId = null)
     {
         var sql = @"SELECT d.id,d.order_id,o.customer_id,d.courier_id,o.address,o.comment,d.status,o.status,o.created_at,
                            d.started_at,d.finished_at,d.failure_reason,d.confirmed_at
@@ -399,45 +346,60 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
         var ps = new List<(string, object?)>();
         if (!string.IsNullOrWhiteSpace(q))
         {
-            sql += @" AND (o.address LIKE $q OR o.comment LIKE $q OR d.id LIKE $q OR o.id LIKE $q
-                       OR EXISTS(SELECT 1 FROM order_items i WHERE i.order_id=o.id AND i.name LIKE $q))";
-            ps.Add(("$q", "%" + q.Trim() + "%"));
+            sql += @" AND (o.address ILIKE @q OR o.comment ILIKE @q OR d.id::text ILIKE @q OR o.id::text ILIKE @q
+                       OR EXISTS(SELECT 1 FROM order_items i WHERE i.order_id=o.id AND i.name ILIKE @q))";
+            ps.Add(("q", "%" + q.Trim() + "%"));
         }
-        if (status is not null) { sql += " AND d.status=$s"; ps.Add(("$s", status.ToString())); }
-        if (courierId is not null) { sql += " AND d.courier_id=$c"; ps.Add(("$c", courierId.ToString())); }
-        if (customerId is not null) { sql += " AND o.customer_id=$u"; ps.Add(("$u", customerId.ToString())); }
-        if (deliveryId is not null) { sql += " AND d.id=$d"; ps.Add(("$d", deliveryId.ToString())); }
-        if (orderId is not null) { sql += " AND d.order_id=$o"; ps.Add(("$o", orderId.ToString())); }
+        if (status is not null) { sql += " AND d.status=@s"; ps.Add(("s", status.ToString())); }
+        if (courierId is not null) { sql += " AND d.courier_id=@c"; ps.Add(("c", courierId)); }
+        if (customerId is not null) { sql += " AND o.customer_id=@u"; ps.Add(("u", customerId)); }
+        if (deliveryId is not null) { sql += " AND d.id=@d"; ps.Add(("d", deliveryId)); }
+        if (orderId is not null) { sql += " AND d.order_id=@o"; ps.Add(("o", orderId)); }
         sql += " ORDER BY o.created_at DESC";
         var list = new List<Delivery>();
         using (var r = Cmd(c, sql, ps.ToArray()).ExecuteReader())
             while (r.Read())
                 list.Add(new Delivery
                 {
-                    DeliveryId = Guid.Parse(r.GetString(0)),
-                    OrderId = Guid.Parse(r.GetString(1)),
-                    CustomerId = Guid.Parse(r.GetString(2)),
-                    CourierId = r.IsDBNull(3) ? null : Guid.Parse(r.GetString(3)),
+                    DeliveryId = r.GetGuid(0),
+                    OrderId = r.GetGuid(1),
+                    CustomerId = r.GetGuid(2),
+                    CourierId = GuidN(r, 3),
                     Address = r.GetString(4),
                     Comment = Str(r, 5),
                     Status = Enum.Parse<DeliveryStatus>(r.GetString(6)),
                     OrderStatus = Enum.Parse<OrderStatus>(r.GetString(7)),
-                    CreatedAt = Dt(r.GetString(8)),
+                    CreatedAt = r.GetDateTime(8),
                     StartedAt = DtN(r, 9),
                     FinishedAt = DtN(r, 10),
                     FailureReason = Str(r, 11),
                     ConfirmedAt = DtN(r, 12)
                 });
+        if (list.Count == 0) return list;
+
+        // дочерние данные одним запросом на таблицу, а не по запросу на каждую доставку
+        var byOrder = list.ToDictionary(d => d.OrderId);
+        var byDelivery = list.ToDictionary(d => d.DeliveryId);
+        var orderIds = byOrder.Keys.ToArray();
+        var deliveryIds = byDelivery.Keys.ToArray();
+        var kopecks = list.ToDictionary(d => d.OrderId, _ => new List<(long, int)>());
+        using (var i = Cmd(c, "SELECT order_id,product_id,name,price_kopecks,quantity FROM order_items WHERE order_id = ANY(@o) ORDER BY id", ("o", orderIds)).ExecuteReader())
+            while (i.Read())
+            {
+                var oid = i.GetGuid(0);
+                byOrder[oid].Items.Add(new OrderItemDto(i.GetGuid(1), i.GetString(2), Money.FromKopecks(i.GetInt64(3)), i.GetInt32(4)));
+                kopecks[oid].Add((i.GetInt64(3), i.GetInt32(4)));
+            }
+        using (var h = Cmd(c, "SELECT delivery_id,status,at,comment,actor_id FROM status_history WHERE delivery_id = ANY(@d) ORDER BY id", ("d", deliveryIds)).ExecuteReader())
+            while (h.Read()) byDelivery[h.GetGuid(0)].History.Add(new StatusChange(Enum.Parse<DeliveryStatus>(h.GetString(1)), h.GetDateTime(2), Str(h, 3), GuidN(h, 4)));
+        using (var h = Cmd(c, "SELECT order_id,status,at,comment,actor_id FROM order_history WHERE order_id = ANY(@o) ORDER BY id", ("o", orderIds)).ExecuteReader())
+            while (h.Read()) byOrder[h.GetGuid(0)].OrderHistory.Add(new OrderStatusChange(Enum.Parse<OrderStatus>(h.GetString(1)), h.GetDateTime(2), Str(h, 3), GuidN(h, 4)));
+        using (var h = Cmd(c, "SELECT order_id,at,actor_id,actor_name,field,old_value,new_value FROM order_changes WHERE order_id = ANY(@o) ORDER BY id", ("o", orderIds)).ExecuteReader())
+            while (h.Read()) byOrder[h.GetGuid(0)].Changes.Add(new OrderChange(h.GetDateTime(1), GuidN(h, 2), Str(h, 3), h.GetString(4), Str(h, 5), Str(h, 6)));
         foreach (var d in list)
         {
-            using (var i = Cmd(c, "SELECT product_id,name,price,quantity FROM order_items WHERE order_id=$o ORDER BY id", ("$o", d.OrderId.ToString())).ExecuteReader())
-                while (i.Read()) d.Items.Add(new OrderItemDto(Guid.Parse(i.GetString(0)), i.GetString(1), (decimal)i.GetDouble(2), i.GetInt32(3)));
             d.Description = string.Join(", ", d.Items.Select(x => $"{x.Name} ×{x.Quantity}"));
-            d.Total = OrderRules.Total(d.Items.Select(x => (x.Price, x.Quantity)));
-            using (var h = Cmd(c, "SELECT status,at,comment FROM status_history WHERE delivery_id=$d ORDER BY id", ("$d", d.DeliveryId.ToString())).ExecuteReader())
-                while (h.Read()) d.History.Add(new StatusChange(Enum.Parse<DeliveryStatus>(h.GetString(0)), Dt(h.GetString(1)), Str(h, 2)));
-            using (var h = Cmd(c, "SELECT status,at,comment FROM order_history WHERE order_id=$o ORDER BY id", ("$o", d.OrderId.ToString())).ExecuteReader())
-                while (h.Read()) d.OrderHistory.Add(new OrderStatusChange(Enum.Parse<OrderStatus>(h.GetString(0)), Dt(h.GetString(1)), Str(h, 2)));
+            d.Total = Money.FromKopecks(Money.Total(kopecks[d.OrderId]));
         }
         return list;
     }
@@ -445,16 +407,30 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
     public Delivery? Delivery(Guid id) { using var c = Open(); return Deliveries(c, deliveryId: id).FirstOrDefault(); }
     public Delivery? Order(Guid id) { using var c = Open(); return Deliveries(c, orderId: id).FirstOrDefault(); }
 
-    private static void Hist(SqliteConnection c, Guid deliveryId, DeliveryStatus s, string? comment) =>
-        Cmd(c, "INSERT INTO status_history(delivery_id,status,at,comment) VALUES($d,$s,$a,$m)",
-            ("$d", deliveryId.ToString()), ("$s", s.ToString()), ("$a", Now()), ("$m", comment)).ExecuteNonQuery();
+    private static void Hist(NpgsqlConnection c, Guid deliveryId, DeliveryStatus s, string? comment, Session? actor = null) =>
+        Cmd(c, "INSERT INTO status_history(delivery_id,status,at,comment,actor_id) VALUES(@d,@s,@a,@m,@u)",
+            ("d", deliveryId), ("s", s.ToString()), ("a", Now()), ("m", comment), ("u", actor?.UserId)).ExecuteNonQuery();
 
-    private static void OrderHist(SqliteConnection c, Guid orderId, OrderStatus s, string? comment) =>
-        Cmd(c, "INSERT INTO order_history(order_id,status,at,comment) VALUES($o,$s,$a,$m)",
-            ("$o", orderId.ToString()), ("$s", s.ToString()), ("$a", Now()), ("$m", comment)).ExecuteNonQuery();
+    private static void OrderHist(NpgsqlConnection c, Guid orderId, OrderStatus s, string? comment, Session? actor = null) =>
+        Cmd(c, "INSERT INTO order_history(order_id,status,at,comment,actor_id) VALUES(@o,@s,@a,@m,@u)",
+            ("o", orderId), ("s", s.ToString()), ("a", Now()), ("m", comment), ("u", actor?.UserId)).ExecuteNonQuery();
+
+    private static void Change(NpgsqlConnection c, Guid orderId, string field, string? oldValue, string? newValue, Session? actor) =>
+        Cmd(c, "INSERT INTO order_changes(order_id,at,actor_id,actor_name,field,old_value,new_value) VALUES(@o,@a,@u,@n,@f,@ov,@nv)",
+            ("o", orderId), ("a", Now()), ("u", actor?.UserId), ("n", actor?.Name), ("f", field), ("ov", oldValue), ("nv", newValue)).ExecuteNonQuery();
+
+    private static string ItemsText(IEnumerable<(string Name, int Quantity)> lines) =>
+        string.Join(", ", lines.OrderBy(l => l.Name, StringComparer.Ordinal).Select(l => $"{l.Name} ×{l.Quantity}"));
+
+    /// <summary>Журнал изменений заказа (состав, адрес, комментарий), от старых к новым.</summary>
+    public List<OrderChange> OrderChanges(Guid orderId)
+    {
+        using var c = Open();
+        return Deliveries(c, orderId: orderId).FirstOrDefault()?.Changes ?? new();
+    }
 
     // ---------- создание и изменение заказа ----------
-    private static (List<(Product p, int q)>? lines, string? error) ResolveItems(SqliteConnection c, List<ItemRequest>? items)
+    private static (List<(Product p, int q)>? lines, string? error) ResolveItems(NpgsqlConnection c, List<ItemRequest>? items)
     {
         if (OrderRules.ValidateQuantities(items?.Select(i => i.Quantity).ToList()) is { } e) return (null, e);
         var products = Products(c).ToDictionary(p => p.Id);
@@ -470,7 +446,7 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
         return (lines, null);
     }
 
-    private static (string? text, AddressDto? inline, string? error) ResolveAddress(SqliteConnection c, Guid customerId, Guid? addressId, AddressDto? inline)
+    private static (string? text, AddressDto? inline, string? error) ResolveAddress(NpgsqlConnection c, Guid customerId, Guid? addressId, AddressDto? inline)
     {
         if (addressId is Guid aid)
         {
@@ -482,14 +458,14 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
     }
 
     /// <summary>Сценарий 1 и 2 из ТЗ: создаёт заказ и доставку, затем пытается назначить свободного курьера.</summary>
-    public (Delivery? d, bool courierAssigned, string? error) CreateOrder(CreateOrderRequest r)
+    public (Delivery? d, bool courierAssigned, string? error) CreateOrder(CreateOrderRequest r, Session? actor = null)
     {
         if (r is null) return (null, false, "INVALID_REQUEST");
         Guid id;
-        lock (_lock)
+        using (var c = Open())
         {
-            using var c = Open();
-            if (Count(c, "SELECT COUNT(*) FROM customers WHERE id=$i", ("$i", r.CustomerId.ToString())) == 0) return (null, false, "CUSTOMER_NOT_FOUND");
+            if (Count(c, "SELECT COUNT(*) FROM customers WHERE id=@i", ("i", r.CustomerId)) == 0) return (null, false, "CUSTOMER_NOT_FOUND");
+            if (ExistingByRequest(c, r) is { } dup) return (dup, dup.CourierId is not null, null); // повторный запрос
             var (lines, e1) = ResolveItems(c, r.Items);
             if (lines is null) return (null, false, e1);
             var (text, inline, e2) = ResolveAddress(c, r.CustomerId, r.AddressId, r.DeliveryAddress);
@@ -497,121 +473,161 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
 
             var orderId = Guid.NewGuid(); id = Guid.NewGuid();
             using var tx = c.BeginTransaction();
-            Cmd(c, "INSERT INTO orders(id,customer_id,address,comment,status,created_at) VALUES($i,$c,$a,$m,$s,$t)",
-                ("$i", orderId.ToString()), ("$c", r.CustomerId.ToString()), ("$a", text),
-                ("$m", string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment.Trim()), ("$s", nameof(OrderStatus.Created)), ("$t", Now())).ExecuteNonQuery();
-            InsertItems(c, orderId, lines);
-            OrderHist(c, orderId, OrderStatus.Created, "Заказ создан");
-            InsertDelivery(c, id, orderId);
-            if (r.SaveAddress && inline is not null)
-                AddAddr(c, r.CustomerId, "", inline.City, inline.Street, inline.House, inline.Apartment);
-            tx.Commit();
+            try
+            {
+                Cmd(c, "INSERT INTO orders(id,customer_id,address,comment,status,created_at,request_id) VALUES(@i,@c,@a,@m,@s,@t,@rq)",
+                    ("i", orderId), ("c", r.CustomerId), ("a", text),
+                    ("m", string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment.Trim()), ("s", nameof(OrderStatus.Created)), ("t", Now()), ("rq", r.RequestId)).ExecuteNonQuery();
+                InsertItems(c, orderId, lines);
+                OrderHist(c, orderId, OrderStatus.Created, "Заказ создан", actor);
+                InsertDelivery(c, id, orderId, actor);
+                if (r.SaveAddress && inline is not null)
+                    AddAddr(c, r.CustomerId, "", inline.City, inline.Street, inline.House, inline.Apartment);
+                tx.Commit(); // заказ, позиции, история и доставка сохраняются атомарно
+            }
+            catch (Exception ex) when (IsPg(ex, PgUniqueViolation) && r.RequestId is not null)
+            {
+                // параллельный дубль того же запроса уже создал заказ
+                tx.Rollback();
+                using var c2 = Open();
+                if (ExistingByRequest(c2, r) is { } dup2) return (dup2, dup2.CourierId is not null, null);
+                throw;
+            }
             _log.LogInformation("Создан заказ {Order}, доставка {Delivery}", orderId, id);
         }
-        var assigned = TryAutoAssign(id);
+        // Назначение курьера — отдельный шаг: его сбой не отменяет уже сохранённый заказ (сценарий 2 из ТЗ).
+        var assigned = TryAutoAssign(id, actor);
         return (Delivery(id), assigned, null);
     }
 
-    private static void InsertItems(SqliteConnection c, Guid orderId, List<(Product p, int q)> lines)
+    private static Delivery? ExistingByRequest(NpgsqlConnection c, CreateOrderRequest r)
     {
-        foreach (var (p, q) in lines)
-            Cmd(c, "INSERT INTO order_items(order_id,product_id,name,price,quantity) VALUES($o,$p,$n,$pr,$q)",
-                ("$o", orderId.ToString()), ("$p", p.Id.ToString()), ("$n", p.Name), ("$pr", (double)p.Price), ("$q", q)).ExecuteNonQuery();
+        if (r.RequestId is not Guid rid) return null;
+        return Cmd(c, "SELECT id FROM orders WHERE customer_id=@c AND request_id=@r", ("c", r.CustomerId), ("r", rid)).ExecuteScalar() is Guid oid
+            ? Deliveries(c, orderId: oid).FirstOrDefault() : null;
     }
 
-    private static void InsertDelivery(SqliteConnection c, Guid id, Guid orderId)
+    private static void InsertItems(NpgsqlConnection c, Guid orderId, List<(Product p, int q)> lines)
     {
-        Cmd(c, "INSERT INTO deliveries(id,order_id,status,created_at) VALUES($i,$o,$s,$t)",
-            ("$i", id.ToString()), ("$o", orderId.ToString()), ("$s", nameof(DeliveryStatus.Created)), ("$t", Now())).ExecuteNonQuery();
-        Hist(c, id, DeliveryStatus.Created, "Доставка создана");
+        foreach (var (p, q) in lines)
+            Cmd(c, "INSERT INTO order_items(order_id,product_id,name,price_kopecks,quantity) VALUES(@o,@p,@n,@pr,@q)",
+                ("o", orderId), ("p", p.Id), ("n", p.Name), ("pr", Money.ToKopecks(p.Price)), ("q", q)).ExecuteNonQuery();
+    }
+
+    private static void InsertDelivery(NpgsqlConnection c, Guid id, Guid orderId, Session? actor = null)
+    {
+        Cmd(c, "INSERT INTO deliveries(id,order_id,status,created_at) VALUES(@i,@o,@s,@t)",
+            ("i", id), ("o", orderId), ("s", nameof(DeliveryStatus.Created)), ("t", Now())).ExecuteNonQuery();
+        Hist(c, id, DeliveryStatus.Created, "Доставка создана", actor);
     }
 
     /// <summary>POST /api/deliveries: создание доставки для уже существующего заказа (идемпотентно по orderId).</summary>
-    public (Delivery? d, string? error) CreateDelivery(Guid orderId)
+    public (Delivery? d, string? error) CreateDelivery(Guid orderId, Session? actor = null)
     {
-        lock (_lock)
-        {
-            using var c = Open();
-            var existing = Deliveries(c, orderId: orderId).FirstOrDefault();
-            if (existing is not null) return (existing, "DELIVERY_ALREADY_EXISTS");
-            if (Count(c, "SELECT COUNT(*) FROM orders WHERE id=$i", ("$i", orderId.ToString())) == 0) return (null, "ORDER_NOT_FOUND");
-            var id = Guid.NewGuid();
-            using var tx = c.BeginTransaction();
-            InsertDelivery(c, id, orderId);
-            tx.Commit();
-            return (Deliveries(c, deliveryId: id).First(), null);
-        }
+        using var c = Open();
+        using var tx = c.BeginTransaction();
+        // блокировка заказа: два одновременных запроса не создадут две доставки
+        if (Cmd(c, "SELECT 1 FROM orders WHERE id=@i FOR UPDATE", ("i", orderId)).ExecuteScalar() is null) return (null, "ORDER_NOT_FOUND");
+        var existing = Deliveries(c, orderId: orderId).FirstOrDefault();
+        if (existing is not null) return (existing, "DELIVERY_ALREADY_EXISTS");
+        var id = Guid.NewGuid();
+        InsertDelivery(c, id, orderId, actor);
+        tx.Commit();
+        return (Deliveries(c, deliveryId: id).First(), null);
     }
 
-    public string? UpdateOrder(Guid orderId, UpdateOrderRequest r)
+    /// <summary>Изменяет состав, адрес и/или комментарий. Каждое реальное изменение пишется в журнал с автором и временем.</summary>
+    public string? UpdateOrder(Guid orderId, UpdateOrderRequest r, Session? actor = null)
     {
-        lock (_lock)
+        using var c = Open();
+        using var tx = c.BeginTransaction();
+        if (Cmd(c, "SELECT 1 FROM orders WHERE id=@i FOR UPDATE", ("i", orderId)).ExecuteScalar() is null) return "ORDER_NOT_FOUND";
+        var d = Deliveries(c, orderId: orderId).First();
+        if (!OrderRules.CanEdit(d.Status)) return "ORDER_NOT_EDITABLE";
+        List<(Product p, int q)>? lines = null;
+        if (r.Items is not null) { var (l, e) = ResolveItems(c, r.Items); if (l is null) return e; lines = l; }
+        string? addr = null;
+        if (r.AddressId is not null || r.DeliveryAddress is not null)
+        { var (t, _, e) = ResolveAddress(c, d.CustomerId, r.AddressId, r.DeliveryAddress); if (t is null) return e; addr = t; }
+
+        var changed = false;
+        if (lines is not null)
         {
-            using var c = Open();
-            var d = Deliveries(c, orderId: orderId).FirstOrDefault();
-            if (d is null) return "ORDER_NOT_FOUND";
-            if (!OrderRules.CanEdit(d.Status)) return "ORDER_NOT_EDITABLE";
-            List<(Product p, int q)>? lines = null;
-            if (r.Items is not null) { var (l, e) = ResolveItems(c, r.Items); if (l is null) return e; lines = l; }
-            string? addr = null;
-            if (r.AddressId is not null || r.DeliveryAddress is not null)
-            { var (t, _, e) = ResolveAddress(c, d.CustomerId, r.AddressId, r.DeliveryAddress); if (t is null) return e; addr = t; }
-            using var tx = c.BeginTransaction();
-            if (lines is not null)
+            var oldItems = ItemsText(d.Items.Select(i => (i.Name, i.Quantity)));
+            var newItems = ItemsText(lines.Select(l => (l.p.Name, l.q)));
+            var sameLines = d.Items.OrderBy(i => i.ProductId).Select(i => (i.ProductId, i.Quantity))
+                .SequenceEqual(lines.OrderBy(l => l.p.Id).Select(l => (l.p.Id, l.q)));
+            if (!sameLines)
             {
-                Cmd(c, "DELETE FROM order_items WHERE order_id=$o", ("$o", orderId.ToString())).ExecuteNonQuery();
+                Cmd(c, "DELETE FROM order_items WHERE order_id=@o", ("o", orderId)).ExecuteNonQuery();
                 InsertItems(c, orderId, lines);
+                Change(c, orderId, "Items", oldItems, newItems, actor);
+                changed = true;
             }
-            Cmd(c, "UPDATE orders SET address=COALESCE($a,address), comment=$m WHERE id=$o",
-                ("$a", addr), ("$m", string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment.Trim()), ("$o", orderId.ToString())).ExecuteNonQuery();
-            OrderHist(c, orderId, d.OrderStatus, "Заказ изменён");
-            tx.Commit();
-            return null;
         }
+        if (addr is not null && addr != d.Address)
+        {
+            Cmd(c, "UPDATE orders SET address=@a WHERE id=@o", ("a", addr), ("o", orderId)).ExecuteNonQuery();
+            Change(c, orderId, "Address", d.Address, addr, actor);
+            changed = true;
+        }
+        if (r.Comment is not null) // null — не менять; пустая строка — очистить
+        {
+            var newComment = string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment.Trim();
+            if (newComment != d.Comment)
+            {
+                Cmd(c, "UPDATE orders SET comment=@m WHERE id=@o", ("m", newComment), ("o", orderId)).ExecuteNonQuery();
+                Change(c, orderId, "Comment", d.Comment, newComment, actor);
+                changed = true;
+            }
+        }
+        if (changed) OrderHist(c, orderId, d.OrderStatus, "Заказ изменён", actor);
+        tx.Commit();
+        return null;
     }
 
     // ---------- назначение курьера ----------
-    private bool TryAutoAssign(Guid deliveryId) => Assign(deliveryId, null) is null;
-
-    /// <summary>Назначает курьера. Без courierId выбирается свободный курьер автоматически (повторное назначение).</summary>
-    public string? Assign(Guid id, Guid? courierId)
+    private bool TryAutoAssign(Guid deliveryId, Session? actor)
     {
-        lock (_lock)
+        try { return Assign(deliveryId, null, actor) is null; }
+        catch (Exception ex) when (ex is DbException or TimeoutException)
         {
-            using var c = Open();
-            var d = Deliveries(c, deliveryId: id).FirstOrDefault();
-            if (d is null) return "DELIVERY_NOT_FOUND";
-            if (d.Status != DeliveryStatus.Created)
-                return DeliveryRules.IsFinal(d.Status) ? "DELIVERY_ALREADY_COMPLETED" : "DELIVERY_ALREADY_ASSIGNED";
-            var all = Couriers(c);
-            Courier? cr;
-            if (courierId is Guid cid)
-            {
-                cr = all.FirstOrDefault(x => x.Id == cid);
-                if (cr is null) return "COURIER_NOT_FOUND";
-                if (!CourierRules.CanAssign(cr.State)) return "COURIER_NOT_AVAILABLE";
-            }
-            else
-            {
-                cr = all.Where(x => CourierRules.CanAssign(x.State)).FirstOrDefault();
-                if (cr is null) return "COURIER_NOT_AVAILABLE";
-            }
-            using var tx = c.BeginTransaction();
-            Cmd(c, "UPDATE couriers SET state='Busy' WHERE id=$i", ("$i", cr.Id.ToString())).ExecuteNonQuery();
-            Cmd(c, "UPDATE deliveries SET courier_id=$c,status=$s WHERE id=$i", ("$c", cr.Id.ToString()), ("$s", nameof(DeliveryStatus.Assigned)), ("$i", id.ToString())).ExecuteNonQuery();
-            Hist(c, id, DeliveryStatus.Assigned, "Назначен курьер " + cr.Name);
-            SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(DeliveryStatus.Assigned), null);
-            tx.Commit();
-            _log.LogInformation("Доставка {Delivery}: назначен курьер {Courier}", id, cr.Id);
-            return null;
+            // заказ уже сохранён, доставка осталась Created: оператор назначит курьера позже
+            _log.LogError(ex, "Не удалось автоматически назначить курьера для доставки {Delivery}", deliveryId);
+            return false;
         }
     }
 
-    private static void SetOrderStatus(SqliteConnection c, Guid orderId, OrderStatus from, OrderStatus to, string? comment)
+    /// <summary>Назначает курьера. Без courierId выбирается свободный курьер автоматически (повторное назначение).</summary>
+    public string? Assign(Guid id, Guid? courierId, Session? actor = null)
+    {
+        using var c = Open();
+        using var tx = c.BeginTransaction();
+        if (Cmd(c, "SELECT 1 FROM deliveries WHERE id=@i FOR UPDATE", ("i", id)).ExecuteScalar() is null) return "DELIVERY_NOT_FOUND";
+        var d = Deliveries(c, deliveryId: id).First();
+        if (d.Status != DeliveryStatus.Created)
+            return DeliveryRules.IsFinal(d.Status) ? "DELIVERY_ALREADY_COMPLETED" : "DELIVERY_ALREADY_ASSIGNED";
+        (Guid Id, string Name, CourierState State)? cr;
+        // FOR UPDATE: один курьер не достанется двум доставкам одновременно; SKIP LOCKED — берём следующего свободного
+        var sel = "SELECT id,name,state FROM couriers WHERE " + (courierId is null ? "state='Available' ORDER BY name FOR UPDATE SKIP LOCKED LIMIT 1" : "id=@c FOR UPDATE");
+        using (var r = Cmd(c, sel, courierId is null ? Array.Empty<(string, object?)>() : new (string, object?)[] { ("c", courierId) }).ExecuteReader())
+            cr = r.Read() ? (r.GetGuid(0), r.GetString(1), Enum.Parse<CourierState>(r.GetString(2))) : null;
+        if (cr is null) return courierId is null ? "COURIER_NOT_AVAILABLE" : "COURIER_NOT_FOUND";
+        if (!CourierRules.CanAssign(cr.Value.State)) return "COURIER_NOT_AVAILABLE";
+        Cmd(c, "UPDATE couriers SET state='Busy' WHERE id=@i", ("i", cr.Value.Id)).ExecuteNonQuery();
+        Cmd(c, "UPDATE deliveries SET courier_id=@c,status=@s WHERE id=@i", ("c", cr.Value.Id), ("s", nameof(DeliveryStatus.Assigned)), ("i", id)).ExecuteNonQuery();
+        Hist(c, id, DeliveryStatus.Assigned, "Назначен курьер " + cr.Value.Name, actor);
+        SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(DeliveryStatus.Assigned), null, actor);
+        tx.Commit();
+        _log.LogInformation("Доставка {Delivery}: назначен курьер {Courier}", id, cr.Value.Id);
+        return null;
+    }
+
+    private static void SetOrderStatus(NpgsqlConnection c, Guid orderId, OrderStatus from, OrderStatus to, string? comment, Session? actor = null)
     {
         if (from == to) return;
-        Cmd(c, "UPDATE orders SET status=$s WHERE id=$o", ("$s", to.ToString()), ("$o", orderId.ToString())).ExecuteNonQuery();
-        OrderHist(c, orderId, to, comment);
+        Cmd(c, "UPDATE orders SET status=@s WHERE id=@o", ("s", to.ToString()), ("o", orderId)).ExecuteNonQuery();
+        OrderHist(c, orderId, to, comment, actor);
     }
 
     // ---------- смена статуса ----------
@@ -619,54 +635,50 @@ CREATE INDEX IF NOT EXISTS ix_ohistory_order ON order_history(order_id);").Execu
 
     public string? ChangeStatus(Guid id, DeliveryStatus s, string? comment, Session? actor = null)
     {
-        lock (_lock)
+        using var c = Open();
+        using var tx = c.BeginTransaction();
+        if (Cmd(c, "SELECT 1 FROM deliveries WHERE id=@i FOR UPDATE", ("i", id)).ExecuteScalar() is null) return "DELIVERY_NOT_FOUND";
+        var d = Deliveries(c, deliveryId: id).First();
+        // права по ролям (null = внутренний вызов, например из тестов)
+        if (actor is not null)
         {
-            using var c = Open();
-            var d = Deliveries(c, deliveryId: id).FirstOrDefault();
-            if (d is null) return "DELIVERY_NOT_FOUND";
-            // права по ролям (null = внутренний вызов, например из тестов)
-            if (actor is not null)
-            {
-                if (actor.Role == "client" && (actor.RefId != d.CustomerId || s != DeliveryStatus.Cancelled)) return "UNAUTHORIZED_STATUS_CHANGE";
-                if (actor.Role == "courier" && (actor.RefId != d.CourierId || !CourierTargets.Contains(s))) return "UNAUTHORIZED_STATUS_CHANGE";
-            }
-            if (d.Status == s) return null; // повторное применение того же перехода — без изменений
-            if (DeliveryRules.IsFinal(d.Status)) return "DELIVERY_ALREADY_COMPLETED";
-            if (actor?.Role == "client" && !OrderRules.CanClientCancel(d.Status)) return "UNAUTHORIZED_STATUS_CHANGE";
-            if (!DeliveryRules.CanTransition(d.Status, s)) return "INVALID_STATUS_TRANSITION";
-            if (s == DeliveryStatus.Failed && string.IsNullOrWhiteSpace(comment)) return "FAILURE_REASON_REQUIRED";
-
-            using var tx = c.BeginTransaction();
-            var final = DeliveryRules.IsFinal(s);
-            Cmd(c, @"UPDATE deliveries SET status=$s,
-                       started_at=CASE WHEN $s='InTransit' AND started_at IS NULL THEN $t ELSE started_at END,
-                       finished_at=CASE WHEN $f=1 THEN $t ELSE finished_at END,
-                       failure_reason=CASE WHEN $s='Failed' THEN $m ELSE failure_reason END
-                     WHERE id=$i", ("$s", s.ToString()), ("$t", Now()), ("$f", final ? 1 : 0), ("$m", comment?.Trim()), ("$i", id.ToString())).ExecuteNonQuery();
-            Hist(c, id, s, string.IsNullOrWhiteSpace(comment) ? null : comment.Trim());
-            SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(s), s == DeliveryStatus.Failed ? "Доставка не выполнена: " + comment!.Trim() : null);
-            if (final && d.CourierId is Guid cid)
-                Cmd(c, "UPDATE couriers SET state='Available' WHERE id=$i AND state='Busy'", ("$i", cid.ToString())).ExecuteNonQuery();
-            tx.Commit();
-            _log.LogInformation("Доставка {Delivery}: {From} → {To}", id, d.Status, s);
-            return null;
+            if (actor.Role == "client" && (actor.RefId != d.CustomerId || s != DeliveryStatus.Cancelled)) return "UNAUTHORIZED_STATUS_CHANGE";
+            if (actor.Role == "courier" && (actor.RefId != d.CourierId || !CourierTargets.Contains(s))) return "UNAUTHORIZED_STATUS_CHANGE";
         }
+        if (d.Status == s) return null; // повторное применение того же перехода — без изменений
+        if (DeliveryRules.IsFinal(d.Status)) return "DELIVERY_ALREADY_COMPLETED";
+        if (actor?.Role == "client" && !OrderRules.CanClientCancel(d.Status)) return "UNAUTHORIZED_STATUS_CHANGE";
+        if (!DeliveryRules.CanTransition(d.Status, s)) return "INVALID_STATUS_TRANSITION";
+        if (s == DeliveryStatus.Failed && string.IsNullOrWhiteSpace(comment)) return "FAILURE_REASON_REQUIRED";
+
+        var final = DeliveryRules.IsFinal(s);
+        Cmd(c, @"UPDATE deliveries SET status=@s,
+                   started_at=CASE WHEN @s='InTransit' AND started_at IS NULL THEN @t ELSE started_at END,
+                   finished_at=CASE WHEN @f THEN @t ELSE finished_at END,
+                   failure_reason=CASE WHEN @s='Failed' THEN @m::text ELSE failure_reason END
+                 WHERE id=@i", ("s", s.ToString()), ("t", Now()), ("f", final), ("m", comment?.Trim()), ("i", id)).ExecuteNonQuery();
+        Hist(c, id, s, string.IsNullOrWhiteSpace(comment) ? null : comment.Trim(), actor);
+        SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(s), s == DeliveryStatus.Failed ? "Доставка не выполнена: " + comment!.Trim() : null, actor);
+        if (final && d.CourierId is Guid cid)
+            Cmd(c, "UPDATE couriers SET state='Available' WHERE id=@i AND state='Busy'", ("i", cid)).ExecuteNonQuery();
+        tx.Commit();
+        _log.LogInformation("Доставка {Delivery}: {From} → {To}", id, d.Status, s);
+        return null;
     }
 
     /// <summary>Клиент подтверждает получение заказа после статуса Delivered.</summary>
     public string? ConfirmReceipt(Guid id, Session? actor)
     {
-        lock (_lock)
-        {
-            using var c = Open();
-            var d = Deliveries(c, deliveryId: id).FirstOrDefault();
-            if (d is null) return "DELIVERY_NOT_FOUND";
-            if (actor is not null && actor.Role == "client" && actor.RefId != d.CustomerId) return "FORBIDDEN";
-            if (d.Status != DeliveryStatus.Delivered) return "INVALID_STATUS_TRANSITION";
-            if (d.ConfirmedAt is not null) return null;
-            Cmd(c, "UPDATE deliveries SET confirmed_at=$t WHERE id=$i", ("$t", Now()), ("$i", id.ToString())).ExecuteNonQuery();
-            return null;
-        }
+        using var c = Open();
+        using var tx = c.BeginTransaction();
+        if (Cmd(c, "SELECT 1 FROM deliveries WHERE id=@i FOR UPDATE", ("i", id)).ExecuteScalar() is null) return "DELIVERY_NOT_FOUND";
+        var d = Deliveries(c, deliveryId: id).First();
+        if (actor is not null && actor.Role == "client" && actor.RefId != d.CustomerId) return "FORBIDDEN";
+        if (d.Status != DeliveryStatus.Delivered) return "INVALID_STATUS_TRANSITION";
+        if (d.ConfirmedAt is not null) return null;
+        Cmd(c, "UPDATE deliveries SET confirmed_at=@t WHERE id=@i", ("t", Now()), ("i", id)).ExecuteNonQuery();
+        tx.Commit();
+        return null;
     }
 
     // ---------- состояние для интерфейса ----------

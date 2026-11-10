@@ -330,6 +330,7 @@ public partial class MainWindow : Window
 
         // время
         var s4 = Section("ВРЕМЯ");
+        KV(s4, "Статус заказа", Texts.O(d["orderStatus"]?.ToString()), d["orderStatus"]?.ToString() is "DeliveryFailed" or "Cancelled" ? "Danger" : "Text");
         KV(s4, "Создан", r.Created); KV(s4, "Начата", Dt(d["startedAt"])); KV(s4, "Завершена", Dt(d["finishedAt"]));
         if (d["confirmedAt"] != null) KV(s4, "Получение", Dt(d["confirmedAt"]));
         KV(s4, "Причина сбоя", d["failureReason"]?.ToString(), "Danger");
@@ -351,6 +352,23 @@ public partial class MainWindow : Window
             if (!string.IsNullOrWhiteSpace(h["comment"]?.ToString())) tx.Children.Add(T(h["comment"]!.ToString(), 12, "Muted", null, true, new Thickness(0, 2, 0, 0)));
             System.Windows.Controls.Grid.SetColumn(tx, 1); g.Children.Add(tx);
             s5.Children.Add(g);
+        }
+
+        // журнал изменений заказа: состав, адрес, комментарий (кто и когда изменил)
+        var changes = d["changes"]?.AsArray() ?? new JsonArray();
+        if (changes.Count > 0)
+        {
+            var s6 = Section("ИЗМЕНЕНИЯ ЗАКАЗА");
+            foreach (var ch in changes.Reverse())
+            {
+                var field = ch!["field"]?.ToString() switch { "Items" => "Состав", "Address" => "Адрес", "Comment" => "Комментарий", var f => f ?? "" };
+                var box = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+                box.Children.Add(T(field, 13, "Text", FontWeights.Medium));
+                box.Children.Add(T($"{Dt(ch["at"])}  ·  {ch["actorName"]?.ToString() ?? "—"}", 11.5, "Faint"));
+                box.Children.Add(T("было: " + (string.IsNullOrEmpty(ch["oldValue"]?.ToString()) ? "—" : ch["oldValue"]!.ToString()), 12, "Muted", null, true, new Thickness(0, 2, 0, 0)));
+                box.Children.Add(T("стало: " + (string.IsNullOrEmpty(ch["newValue"]?.ToString()) ? "—" : ch["newValue"]!.ToString()), 12, "Text", null, true));
+                s6.Children.Add(box);
+            }
         }
     }
 

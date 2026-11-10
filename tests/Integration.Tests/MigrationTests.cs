@@ -90,11 +90,10 @@ INSERT INTO order_history(order_id,status,at,comment) VALUES('{Order}','Created'
     }
 
     [Fact]
-    public void ConcurrentStarts_DoNotConflict()
+    public async Task ConcurrentStarts_DoNotConflict()
     {
-        var tasks = Enumerable.Range(0, 4).Select(_ => Task.Run(() => Migrator.Apply(_ds, Migrations.All))).ToArray();
-        Task.WaitAll(tasks);
-        Assert.All(tasks, t => Assert.Equal(Migrations.All.Count, t.Result));
+        var versions = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() => Migrator.Apply(_ds, Migrations.All))));
+        Assert.All(versions, v => Assert.Equal(Migrations.All.Count, v));
     }
 
     [Fact]

@@ -155,7 +155,7 @@ Roles(api.MapPost("/orders", (HttpContext h, Store s, CreateOrderRequest r) =>
     var me = Me(h);
     if (r is null) return Err("INVALID_REQUEST");
     if (me.RefId != r.CustomerId) return Err("FORBIDDEN");
-    var (d, assigned, e) = s.CreateOrder(r);
+    var (d, assigned, e) = s.CreateOrder(r, me);
     return d is null ? Err(e!) : Results.Ok(new
     {
         orderId = d.OrderId,
@@ -171,12 +171,14 @@ Roles(api.MapGet("/orders/{id:guid}", (HttpContext h, Store s, Guid id) =>
     s.Order(id) is not { } d ? Err("ORDER_NOT_FOUND") : !Own(Me(h), d.CustomerId) && !(Me(h).Role == "courier" && d.CourierId == Me(h).RefId) ? Err("FORBIDDEN") : Results.Ok(d)));
 Roles(api.MapPut("/orders/{id:guid}", (HttpContext h, Store s, Guid id, UpdateOrderRequest r) =>
     s.Order(id) is not { } d ? Err("ORDER_NOT_FOUND") : !Own(Me(h), d.CustomerId) ? Err("FORBIDDEN")
-    : s.UpdateOrder(id, r) is { } e ? Err(e) : Results.Ok()), "operator", "client");
+    : s.UpdateOrder(id, r, Me(h)) is { } e ? Err(e) : Results.Ok()), "operator", "client");
+Roles(api.MapGet("/orders/{id:guid}/changes", (HttpContext h, Store s, Guid id) =>
+    s.Order(id) is not { } d ? Err("ORDER_NOT_FOUND") : !Own(Me(h), d.CustomerId) ? Err("FORBIDDEN") : Results.Ok(d.Changes)), "operator", "client");
 
 // --- доставки ---
-Roles(api.MapPost("/deliveries", (Store s, CreateDeliveryBody b) =>
+Roles(api.MapPost("/deliveries", (HttpContext h, Store s, CreateDeliveryBody b) =>
 {
-    var (d, e) = s.CreateDelivery(b.OrderId);
+    var (d, e) = s.CreateDelivery(b.OrderId, Me(h));
     return e is null ? Results.Ok(new { deliveryId = d!.DeliveryId, orderId = d.OrderId, status = d.Status })
         : e == "DELIVERY_ALREADY_EXISTS" ? Results.Json(new { success = false, errorCode = e, error = e, message = messages[e], deliveryId = d!.DeliveryId }, statusCode: 409) : Err(e);
 }), "operator");
@@ -190,8 +192,8 @@ Roles(api.MapGet("/deliveries", (HttpContext h, Store s, string? q, DeliveryStat
 Roles(api.MapGet("/deliveries/{id:guid}", (HttpContext h, Store s, Guid id) =>
     s.Delivery(id) is not { } d ? Err("DELIVERY_NOT_FOUND")
     : !Own(Me(h), d.CustomerId) && !(Me(h).Role == "courier" && d.CourierId == Me(h).RefId) ? Err("FORBIDDEN") : Results.Ok(d)));
-Roles(api.MapPost("/deliveries/{id:guid}/assign", (Store s, Guid id, AssignRequest? r) =>
-    s.Assign(id, r?.CourierId) is { } e ? Err(e) : Results.Ok(new { deliveryId = id, courierId = s.Delivery(id)!.CourierId, status = DeliveryStatus.Assigned })), "operator");
+Roles(api.MapPost("/deliveries/{id:guid}/assign", (HttpContext h, Store s, Guid id, AssignRequest? r) =>
+    s.Assign(id, r?.CourierId, Me(h)) is { } e ? Err(e) : Results.Ok(new { deliveryId = id, courierId = s.Delivery(id)!.CourierId, status = DeliveryStatus.Assigned })), "operator");
 Roles(api.MapPatch("/deliveries/{id:guid}/status", (HttpContext h, Store s, Guid id, StatusRequest r) =>
 {
     var before = s.Delivery(id)?.Status;

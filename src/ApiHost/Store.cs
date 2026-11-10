@@ -94,11 +94,11 @@ public class Store : IDisposable
     {
         if (string.IsNullOrWhiteSpace(login) || password is null) return null;
         using var c = Open();
-        byte[] salt, hash; string role; Guid? refId;
-        using (var r = Cmd(c, "SELECT salt,hash,role,ref_id FROM users WHERE lower(login)=lower(@l)", ("l", login.Trim())).ExecuteReader())
+        byte[] salt, hash; string role; Guid? refId; Guid userId;
+        using (var r = Cmd(c, "SELECT salt,hash,role,ref_id,id FROM users WHERE lower(login)=lower(@l)", ("l", login.Trim())).ExecuteReader())
         {
             if (!r.Read()) return null;
-            salt = (byte[])r["salt"]; hash = (byte[])r["hash"]; role = r.GetString(2); refId = GuidN(r, 3);
+            salt = (byte[])r["salt"]; hash = (byte[])r["hash"]; role = r.GetString(2); refId = GuidN(r, 3); userId = r.GetGuid(4);
         }
         if (!CryptographicOperations.FixedTimeEquals(hash, Hash(password, salt))) return null;
         var name = role switch
@@ -107,7 +107,7 @@ public class Store : IDisposable
             "courier" => Cmd(c, "SELECT name FROM couriers WHERE id=@i", ("i", refId)).ExecuteScalar() as string,
             _ => "Оператор"
         };
-        return new Session(role, refId, name ?? login);
+        return new Session(role, refId, name ?? login, userId);
     }
 
     private static (string login, string password) NewCredentials(string? login, string? password, string prefix)
@@ -390,10 +390,12 @@ public class Store : IDisposable
                 byOrder[oid].Items.Add(new OrderItemDto(i.GetGuid(1), i.GetString(2), Money.FromKopecks(i.GetInt64(3)), i.GetInt32(4)));
                 kopecks[oid].Add((i.GetInt64(3), i.GetInt32(4)));
             }
-        using (var h = Cmd(c, "SELECT delivery_id,status,at,comment FROM status_history WHERE delivery_id = ANY(@d) ORDER BY id", ("d", deliveryIds)).ExecuteReader())
-            while (h.Read()) byDelivery[h.GetGuid(0)].History.Add(new StatusChange(Enum.Parse<DeliveryStatus>(h.GetString(1)), h.GetDateTime(2), Str(h, 3)));
-        using (var h = Cmd(c, "SELECT order_id,status,at,comment FROM order_history WHERE order_id = ANY(@o) ORDER BY id", ("o", orderIds)).ExecuteReader())
-            while (h.Read()) byOrder[h.GetGuid(0)].OrderHistory.Add(new OrderStatusChange(Enum.Parse<OrderStatus>(h.GetString(1)), h.GetDateTime(2), Str(h, 3)));
+        using (var h = Cmd(c, "SELECT delivery_id,status,at,comment,actor_id FROM status_history WHERE delivery_id = ANY(@d) ORDER BY id", ("d", deliveryIds)).ExecuteReader())
+            while (h.Read()) byDelivery[h.GetGuid(0)].History.Add(new StatusChange(Enum.Parse<DeliveryStatus>(h.GetString(1)), h.GetDateTime(2), Str(h, 3), GuidN(h, 4)));
+        using (var h = Cmd(c, "SELECT order_id,status,at,comment,actor_id FROM order_history WHERE order_id = ANY(@o) ORDER BY id", ("o", orderIds)).ExecuteReader())
+            while (h.Read()) byOrder[h.GetGuid(0)].OrderHistory.Add(new OrderStatusChange(Enum.Parse<OrderStatus>(h.GetString(1)), h.GetDateTime(2), Str(h, 3), GuidN(h, 4)));
+        using (var h = Cmd(c, "SELECT order_id,at,actor_id,actor_name,field,old_value,new_value FROM order_changes WHERE order_id = ANY(@o) ORDER BY id", ("o", orderIds)).ExecuteReader())
+            while (h.Read()) byOrder[h.GetGuid(0)].Changes.Add(new OrderChange(h.GetDateTime(1), GuidN(h, 2), Str(h, 3), h.GetString(4), Str(h, 5), Str(h, 6)));
         foreach (var d in list)
         {
             d.Description = string.Join(", ", d.Items.Select(x => $"{x.Name} ×{x.Quantity}"));
@@ -405,13 +407,27 @@ public class Store : IDisposable
     public Delivery? Delivery(Guid id) { using var c = Open(); return Deliveries(c, deliveryId: id).FirstOrDefault(); }
     public Delivery? Order(Guid id) { using var c = Open(); return Deliveries(c, orderId: id).FirstOrDefault(); }
 
-    private static void Hist(NpgsqlConnection c, Guid deliveryId, DeliveryStatus s, string? comment) =>
-        Cmd(c, "INSERT INTO status_history(delivery_id,status,at,comment) VALUES(@d,@s,@a,@m)",
-            ("d", deliveryId), ("s", s.ToString()), ("a", Now()), ("m", comment)).ExecuteNonQuery();
+    private static void Hist(NpgsqlConnection c, Guid deliveryId, DeliveryStatus s, string? comment, Session? actor = null) =>
+        Cmd(c, "INSERT INTO status_history(delivery_id,status,at,comment,actor_id) VALUES(@d,@s,@a,@m,@u)",
+            ("d", deliveryId), ("s", s.ToString()), ("a", Now()), ("m", comment), ("u", actor?.UserId)).ExecuteNonQuery();
 
-    private static void OrderHist(NpgsqlConnection c, Guid orderId, OrderStatus s, string? comment) =>
-        Cmd(c, "INSERT INTO order_history(order_id,status,at,comment) VALUES(@o,@s,@a,@m)",
-            ("o", orderId), ("s", s.ToString()), ("a", Now()), ("m", comment)).ExecuteNonQuery();
+    private static void OrderHist(NpgsqlConnection c, Guid orderId, OrderStatus s, string? comment, Session? actor = null) =>
+        Cmd(c, "INSERT INTO order_history(order_id,status,at,comment,actor_id) VALUES(@o,@s,@a,@m,@u)",
+            ("o", orderId), ("s", s.ToString()), ("a", Now()), ("m", comment), ("u", actor?.UserId)).ExecuteNonQuery();
+
+    private static void Change(NpgsqlConnection c, Guid orderId, string field, string? oldValue, string? newValue, Session? actor) =>
+        Cmd(c, "INSERT INTO order_changes(order_id,at,actor_id,actor_name,field,old_value,new_value) VALUES(@o,@a,@u,@n,@f,@ov,@nv)",
+            ("o", orderId), ("a", Now()), ("u", actor?.UserId), ("n", actor?.Name), ("f", field), ("ov", oldValue), ("nv", newValue)).ExecuteNonQuery();
+
+    private static string ItemsText(IEnumerable<(string Name, int Quantity)> lines) =>
+        string.Join(", ", lines.OrderBy(l => l.Name, StringComparer.Ordinal).Select(l => $"{l.Name} ×{l.Quantity}"));
+
+    /// <summary>Журнал изменений заказа (состав, адрес, комментарий), от старых к новым.</summary>
+    public List<OrderChange> OrderChanges(Guid orderId)
+    {
+        using var c = Open();
+        return Deliveries(c, orderId: orderId).FirstOrDefault()?.Changes ?? new();
+    }
 
     // ---------- создание и изменение заказа ----------
     private static (List<(Product p, int q)>? lines, string? error) ResolveItems(NpgsqlConnection c, List<ItemRequest>? items)
@@ -442,7 +458,7 @@ public class Store : IDisposable
     }
 
     /// <summary>Сценарий 1 и 2 из ТЗ: создаёт заказ и доставку, затем пытается назначить свободного курьера.</summary>
-    public (Delivery? d, bool courierAssigned, string? error) CreateOrder(CreateOrderRequest r)
+    public (Delivery? d, bool courierAssigned, string? error) CreateOrder(CreateOrderRequest r, Session? actor = null)
     {
         if (r is null) return (null, false, "INVALID_REQUEST");
         Guid id;
@@ -463,8 +479,8 @@ public class Store : IDisposable
                     ("i", orderId), ("c", r.CustomerId), ("a", text),
                     ("m", string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment.Trim()), ("s", nameof(OrderStatus.Created)), ("t", Now()), ("rq", r.RequestId)).ExecuteNonQuery();
                 InsertItems(c, orderId, lines);
-                OrderHist(c, orderId, OrderStatus.Created, "Заказ создан");
-                InsertDelivery(c, id, orderId);
+                OrderHist(c, orderId, OrderStatus.Created, "Заказ создан", actor);
+                InsertDelivery(c, id, orderId, actor);
                 if (r.SaveAddress && inline is not null)
                     AddAddr(c, r.CustomerId, "", inline.City, inline.Street, inline.House, inline.Apartment);
                 tx.Commit(); // заказ, позиции, история и доставка сохраняются атомарно
@@ -480,7 +496,7 @@ public class Store : IDisposable
             _log.LogInformation("Создан заказ {Order}, доставка {Delivery}", orderId, id);
         }
         // Назначение курьера — отдельный шаг: его сбой не отменяет уже сохранённый заказ (сценарий 2 из ТЗ).
-        var assigned = TryAutoAssign(id);
+        var assigned = TryAutoAssign(id, actor);
         return (Delivery(id), assigned, null);
     }
 
@@ -498,15 +514,15 @@ public class Store : IDisposable
                 ("o", orderId), ("p", p.Id), ("n", p.Name), ("pr", Money.ToKopecks(p.Price)), ("q", q)).ExecuteNonQuery();
     }
 
-    private static void InsertDelivery(NpgsqlConnection c, Guid id, Guid orderId)
+    private static void InsertDelivery(NpgsqlConnection c, Guid id, Guid orderId, Session? actor = null)
     {
         Cmd(c, "INSERT INTO deliveries(id,order_id,status,created_at) VALUES(@i,@o,@s,@t)",
             ("i", id), ("o", orderId), ("s", nameof(DeliveryStatus.Created)), ("t", Now())).ExecuteNonQuery();
-        Hist(c, id, DeliveryStatus.Created, "Доставка создана");
+        Hist(c, id, DeliveryStatus.Created, "Доставка создана", actor);
     }
 
     /// <summary>POST /api/deliveries: создание доставки для уже существующего заказа (идемпотентно по orderId).</summary>
-    public (Delivery? d, string? error) CreateDelivery(Guid orderId)
+    public (Delivery? d, string? error) CreateDelivery(Guid orderId, Session? actor = null)
     {
         using var c = Open();
         using var tx = c.BeginTransaction();
@@ -515,12 +531,13 @@ public class Store : IDisposable
         var existing = Deliveries(c, orderId: orderId).FirstOrDefault();
         if (existing is not null) return (existing, "DELIVERY_ALREADY_EXISTS");
         var id = Guid.NewGuid();
-        InsertDelivery(c, id, orderId);
+        InsertDelivery(c, id, orderId, actor);
         tx.Commit();
         return (Deliveries(c, deliveryId: id).First(), null);
     }
 
-    public string? UpdateOrder(Guid orderId, UpdateOrderRequest r)
+    /// <summary>Изменяет состав, адрес и/или комментарий. Каждое реальное изменение пишется в журнал с автором и временем.</summary>
+    public string? UpdateOrder(Guid orderId, UpdateOrderRequest r, Session? actor = null)
     {
         using var c = Open();
         using var tx = c.BeginTransaction();
@@ -532,23 +549,47 @@ public class Store : IDisposable
         string? addr = null;
         if (r.AddressId is not null || r.DeliveryAddress is not null)
         { var (t, _, e) = ResolveAddress(c, d.CustomerId, r.AddressId, r.DeliveryAddress); if (t is null) return e; addr = t; }
+
+        var changed = false;
         if (lines is not null)
         {
-            Cmd(c, "DELETE FROM order_items WHERE order_id=@o", ("o", orderId)).ExecuteNonQuery();
-            InsertItems(c, orderId, lines);
+            var oldItems = ItemsText(d.Items.Select(i => (i.Name, i.Quantity)));
+            var newItems = ItemsText(lines.Select(l => (l.p.Name, l.q)));
+            var sameLines = d.Items.OrderBy(i => i.ProductId).Select(i => (i.ProductId, i.Quantity))
+                .SequenceEqual(lines.OrderBy(l => l.p.Id).Select(l => (l.p.Id, l.q)));
+            if (!sameLines)
+            {
+                Cmd(c, "DELETE FROM order_items WHERE order_id=@o", ("o", orderId)).ExecuteNonQuery();
+                InsertItems(c, orderId, lines);
+                Change(c, orderId, "Items", oldItems, newItems, actor);
+                changed = true;
+            }
         }
-        // comment == null — не менять; пустая строка — очистить
-        Cmd(c, "UPDATE orders SET address=COALESCE(@a::text,address), comment=CASE WHEN @hc THEN @m::text ELSE comment END WHERE id=@o",
-            ("a", addr), ("hc", r.Comment is not null), ("m", string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment?.Trim()), ("o", orderId)).ExecuteNonQuery();
-        OrderHist(c, orderId, d.OrderStatus, "Заказ изменён");
+        if (addr is not null && addr != d.Address)
+        {
+            Cmd(c, "UPDATE orders SET address=@a WHERE id=@o", ("a", addr), ("o", orderId)).ExecuteNonQuery();
+            Change(c, orderId, "Address", d.Address, addr, actor);
+            changed = true;
+        }
+        if (r.Comment is not null) // null — не менять; пустая строка — очистить
+        {
+            var newComment = string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment.Trim();
+            if (newComment != d.Comment)
+            {
+                Cmd(c, "UPDATE orders SET comment=@m WHERE id=@o", ("m", newComment), ("o", orderId)).ExecuteNonQuery();
+                Change(c, orderId, "Comment", d.Comment, newComment, actor);
+                changed = true;
+            }
+        }
+        if (changed) OrderHist(c, orderId, d.OrderStatus, "Заказ изменён", actor);
         tx.Commit();
         return null;
     }
 
     // ---------- назначение курьера ----------
-    private bool TryAutoAssign(Guid deliveryId)
+    private bool TryAutoAssign(Guid deliveryId, Session? actor)
     {
-        try { return Assign(deliveryId, null) is null; }
+        try { return Assign(deliveryId, null, actor) is null; }
         catch (Exception ex) when (ex is DbException or TimeoutException)
         {
             // заказ уже сохранён, доставка осталась Created: оператор назначит курьера позже
@@ -558,7 +599,7 @@ public class Store : IDisposable
     }
 
     /// <summary>Назначает курьера. Без courierId выбирается свободный курьер автоматически (повторное назначение).</summary>
-    public string? Assign(Guid id, Guid? courierId)
+    public string? Assign(Guid id, Guid? courierId, Session? actor = null)
     {
         using var c = Open();
         using var tx = c.BeginTransaction();
@@ -575,18 +616,18 @@ public class Store : IDisposable
         if (!CourierRules.CanAssign(cr.Value.State)) return "COURIER_NOT_AVAILABLE";
         Cmd(c, "UPDATE couriers SET state='Busy' WHERE id=@i", ("i", cr.Value.Id)).ExecuteNonQuery();
         Cmd(c, "UPDATE deliveries SET courier_id=@c,status=@s WHERE id=@i", ("c", cr.Value.Id), ("s", nameof(DeliveryStatus.Assigned)), ("i", id)).ExecuteNonQuery();
-        Hist(c, id, DeliveryStatus.Assigned, "Назначен курьер " + cr.Value.Name);
-        SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(DeliveryStatus.Assigned), null);
+        Hist(c, id, DeliveryStatus.Assigned, "Назначен курьер " + cr.Value.Name, actor);
+        SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(DeliveryStatus.Assigned), null, actor);
         tx.Commit();
         _log.LogInformation("Доставка {Delivery}: назначен курьер {Courier}", id, cr.Value.Id);
         return null;
     }
 
-    private static void SetOrderStatus(NpgsqlConnection c, Guid orderId, OrderStatus from, OrderStatus to, string? comment)
+    private static void SetOrderStatus(NpgsqlConnection c, Guid orderId, OrderStatus from, OrderStatus to, string? comment, Session? actor = null)
     {
         if (from == to) return;
         Cmd(c, "UPDATE orders SET status=@s WHERE id=@o", ("s", to.ToString()), ("o", orderId)).ExecuteNonQuery();
-        OrderHist(c, orderId, to, comment);
+        OrderHist(c, orderId, to, comment, actor);
     }
 
     // ---------- смена статуса ----------
@@ -616,8 +657,8 @@ public class Store : IDisposable
                    finished_at=CASE WHEN @f THEN @t ELSE finished_at END,
                    failure_reason=CASE WHEN @s='Failed' THEN @m::text ELSE failure_reason END
                  WHERE id=@i", ("s", s.ToString()), ("t", Now()), ("f", final), ("m", comment?.Trim()), ("i", id)).ExecuteNonQuery();
-        Hist(c, id, s, string.IsNullOrWhiteSpace(comment) ? null : comment.Trim());
-        SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(s), s == DeliveryStatus.Failed ? "Доставка не выполнена: " + comment!.Trim() : null);
+        Hist(c, id, s, string.IsNullOrWhiteSpace(comment) ? null : comment.Trim(), actor);
+        SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(s), s == DeliveryStatus.Failed ? "Доставка не выполнена: " + comment!.Trim() : null, actor);
         if (final && d.CourierId is Guid cid)
             Cmd(c, "UPDATE couriers SET state='Available' WHERE id=@i AND state='Busy'", ("i", cid)).ExecuteNonQuery();
         tx.Commit();

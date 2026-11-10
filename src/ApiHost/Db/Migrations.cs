@@ -46,5 +46,16 @@ CREATE INDEX ix_ohistory_order ON order_history(order_id);"),
 -- идемпотентное создание заказа: повтор запроса с тем же requestId возвращает уже созданный заказ
 ALTER TABLE orders ADD COLUMN request_id uuid NULL;
 CREATE UNIQUE INDEX ux_orders_request ON orders(customer_id, request_id) WHERE request_id IS NOT NULL;"),
+
+        new(3, "order_changes_and_actors", @"
+-- журнал изменений заказа: что, когда, кем и как изменено (users.id без FK, чтобы история переживала удаление учётной записи)
+CREATE TABLE order_changes(
+  id bigserial PRIMARY KEY, order_id uuid NOT NULL REFERENCES orders(id),
+  at timestamptz NOT NULL, actor_id uuid NULL, actor_name text NULL,
+  field text NOT NULL CHECK (field IN ('Items','Address','Comment')),
+  old_value text NULL, new_value text NULL);
+CREATE INDEX ix_order_changes_order ON order_changes(order_id);
+ALTER TABLE status_history ADD COLUMN actor_id uuid NULL;
+ALTER TABLE order_history ADD COLUMN actor_id uuid NULL;"),
     };
 }

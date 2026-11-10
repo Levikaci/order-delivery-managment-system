@@ -1,15 +1,13 @@
 using ApiHost;
 using Contracts;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Integration.Tests;
 
-/// <summary>Сценарии из ТЗ на настоящей SQLite-базе (временный файл на каждый тест).</summary>
+/// <summary>Сценарии из ТЗ на настоящем PostgreSQL (отдельная база на каждый тест).</summary>
 public class ScenarioTests : IDisposable
 {
-    private readonly string _db = Path.Combine(Path.GetTempPath(), $"t-{Guid.NewGuid():N}.db");
+    private readonly TestDb _db = new();
     private readonly Store _s;
     private readonly Guid _ivan, _maria;
     private readonly Product _pizza, _juice;
@@ -17,15 +15,14 @@ public class ScenarioTests : IDisposable
 
     public ScenarioTests()
     {
-        var cfg = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:Default"] = $"Data Source={_db};Pooling=False" }).Build();
-        _s = new Store(cfg, NullLogger<Store>.Instance);
+        _s = _db.OpenStore();
         _ivan = _s.Customers().First(c => c.Name.StartsWith("Иван")).Id;
         _maria = _s.Customers().First(c => c.Name.StartsWith("Мария")).Id;
         _pizza = _s.Products().First(p => p.Name.Contains("Пицца"));
         _juice = _s.Products().First(p => p.Name.Contains("Сок"));
     }
 
-    public void Dispose() { foreach (var f in Directory.GetFiles(Path.GetTempPath(), Path.GetFileName(_db) + "*")) try { File.Delete(f); } catch { } }
+    public void Dispose() { _s.Dispose(); _db.Dispose(); }
 
     private CreateOrderRequest Req(Guid? customer = null, int qty = 2) =>
         new(customer ?? _ivan, new() { new(_pizza.Id, qty), new(_juice.Id, 1) }, Addr);

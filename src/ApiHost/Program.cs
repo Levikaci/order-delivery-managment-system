@@ -10,6 +10,7 @@ builder.Services.AddSingleton<Store>();
 builder.Services.AddSingleton<AuthService>();
 
 var app = builder.Build();
+app.Services.GetRequiredService<Store>(); // применить миграции при старте: при ошибке приложение не запускается с повреждённой схемой
 
 // Единый формат ошибок (ErrorResponse из ТЗ): { success:false, errorCode, message }.
 var messages = new Dictionary<string, string>

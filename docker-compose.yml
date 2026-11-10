@@ -24,6 +24,8 @@ services:
       - "8080:8080"
     environment:
       ConnectionStrings__Default: "Host=db;Port=5432;Database=delivery;Username=delivery;Password=${POSTGRES_PASSWORD:-delivery}"
+      Seed__Demo: "${SEED_DEMO:-true}"                 # false — без демо-данных и демо-паролей
+      Seed__OperatorPassword: "${OPERATOR_PASSWORD:-}" # обязателен при SEED_DEMO=false (не короче 8 символов)
     restart: unless-stopped
 volumes:
   pgdata:

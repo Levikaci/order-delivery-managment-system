@@ -43,6 +43,8 @@ var messages = new Dictionary<string, string>
     ["UNAUTHORIZED_STATUS_CHANGE"] = "Вы не можете изменить этот статус (отмена возможна только до передачи в доставку)",
     ["FAILURE_REASON_REQUIRED"] = "Укажите причину, по которой доставка не выполнена",
     ["ORDER_NOT_EDITABLE"] = "Заказ нельзя изменить после принятия курьером",
+    ["WEAK_PASSWORD"] = "Новый пароль должен быть не короче 8 символов и отличаться от старого",
+    ["DELIVERY_NOT_FAILED"] = "Повторить можно только неудачную доставку",
     ["STORAGE_ERROR"] = "Временная ошибка хранилища данных. Повторите запрос позже",
     ["INTERNAL_ERROR"] = "Внутренняя ошибка сервера",
 };
@@ -56,7 +58,7 @@ IResult Err(string code)
         "STORAGE_ERROR" or "INTERNAL_ERROR" => 500,
         _ when code.EndsWith("NOT_FOUND") => 404,
         _ when code.EndsWith("HAS_ORDERS") || code.StartsWith("DELIVERY_ALREADY") || code is "COURIER_NOT_AVAILABLE" or "COURIER_BUSY"
-            or "INVALID_STATUS_TRANSITION" or "ORDER_NOT_EDITABLE" or "LOGIN_TAKEN" => 409,
+            or "INVALID_STATUS_TRANSITION" or "DELIVERY_NOT_FAILED" or "ORDER_NOT_EDITABLE" or "LOGIN_TAKEN" => 409,
         _ => 400
     };
     return Results.Json(new { success = false, errorCode = code, error = code, message = messages.GetValueOrDefault(code, code) }, statusCode: status);
@@ -97,6 +99,8 @@ api.MapPost("/auth/login", (HttpContext h, Store s, AuthService a, LoginRequest 
         ? Results.Ok(new { token = a.Start(me), role = me.Role, refId = me.RefId, name = me.Name })
         : Err("INVALID_CREDENTIALS"));
 Roles(api.MapPost("/auth/logout", (HttpContext h, AuthService a) => { a.End(AuthService.Token(h.Request)!); return Results.Ok(); }));
+Roles(api.MapPost("/auth/password", (HttpContext h, Store s, ChangePasswordRequest r) =>
+    s.ChangePassword(Me(h), r?.OldPassword, r?.NewPassword, AuthService.Token(h.Request) is { } t ? AuthService.HashToken(t) : null) is { } e ? Err(e) : Results.Ok()));
 Roles(api.MapGet("/auth/me", (HttpContext h) => Results.Ok(Me(h))));
 
 Roles(api.MapGet("/state", (HttpContext h, Store s) => Results.Ok(s.Snapshot(Me(h)))));
@@ -199,6 +203,8 @@ Roles(api.MapPatch("/deliveries/{id:guid}/status", (HttpContext h, Store s, Guid
     var before = s.Delivery(id)?.Status;
     return s.ChangeStatus(id, r.Status, r.Comment, Me(h)) is { } e ? Err(e) : Results.Ok(new { deliveryId = id, previousStatus = before, status = r.Status });
 }));
+Roles(api.MapPost("/deliveries/{id:guid}/retry", (HttpContext h, Store s, Guid id) =>
+    s.Retry(id, Me(h)) is { } e ? Err(e) : Results.Ok(new { deliveryId = id, status = s.Delivery(id)!.Status })), "operator");
 Roles(api.MapPost("/deliveries/{id:guid}/confirm", (HttpContext h, Store s, Guid id) =>
     s.ConfirmReceipt(id, Me(h)) is { } e ? Err(e) : Results.Ok()), "client", "operator");
 

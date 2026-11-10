@@ -467,6 +467,7 @@ public partial class MainWindow : Window
             if (st == "Created") Btn(OrderActions, "Назначить курьера", AssignAsync, "Primary");
             var next = Texts.Next.GetValueOrDefault(st ?? "")?.Where(s => s != "Assigned").ToArray() ?? Array.Empty<string>();
             if (next.Length > 0) Btn(OrderActions, "Сменить статус", () => OperatorStatusAsync(next));
+            if (st == "Failed") Btn(OrderActions, "Повторить доставку", () => Api.PostAsync($"api/deliveries/{r.Id}/retry"), "Primary");
             if (st == "Delivered" && r.Node["confirmedAt"] == null) Btn(OrderActions, "Подтвердить получение", () => Api.PostAsync($"api/deliveries/{r.Id}/confirm"), "Primary");
         }
         else if (role == "client")
@@ -508,7 +509,7 @@ public partial class MainWindow : Window
 
     private async Task AssignAsync()
     {
-        var items = new List<(string, string)> { ("", "Автоматически (первый свободный)") };
+        var items = new List<(string, string)> { ("", "Автоматически (наименее загруженный)") };
         items.AddRange(Arr("couriers").Where(c => c!["state"]!.ToString() == "Available").Select(c => (c!["id"]!.ToString(), c["name"]!.ToString())));
         var dlg = new PickDialog(this, "Назначение курьера", "Выберите курьера", items);
         if (dlg.ShowDialog() != true) return;

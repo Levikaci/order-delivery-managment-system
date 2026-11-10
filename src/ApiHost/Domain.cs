@@ -32,6 +32,7 @@ public record CourierStateRequest(CourierState State);
 public record ProductRequest(string Name, decimal Price);
 public record AddressRequest(string? Label, string City, string Street, string House, string? Apartment);
 public record LoginRequest(string Login, string Password);
+public record ChangePasswordRequest(string OldPassword, string NewPassword);
 
 public record StatusChange(DeliveryStatus Status, DateTime At, string? Comment, Guid? ActorId = null);
 public record OrderStatusChange(OrderStatus Status, DateTime At, string? Comment, Guid? ActorId = null);

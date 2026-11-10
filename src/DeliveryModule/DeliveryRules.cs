@@ -16,6 +16,9 @@ public static class DeliveryRules
     public static bool IsFinal(DeliveryStatus s) =>
         s is DeliveryStatus.Delivered or DeliveryStatus.Failed or DeliveryStatus.Cancelled;
 
+    /// <summary>Повторить можно только неудачную доставку: она возвращается в Created.</summary>
+    public static bool CanRetry(DeliveryStatus s) => s == DeliveryStatus.Failed;
+
     public static bool CanTransition(DeliveryStatus from, DeliveryStatus to) =>
         Transitions.TryGetValue(from, out var next) && next.Contains(to);
 

@@ -57,5 +57,13 @@ CREATE TABLE order_changes(
 CREATE INDEX ix_order_changes_order ON order_changes(order_id);
 ALTER TABLE status_history ADD COLUMN actor_id uuid NULL;
 ALTER TABLE order_history ADD COLUMN actor_id uuid NULL;"),
+
+        new(4, "persistent_sessions", @"
+-- сессии переживают перезапуск сервера; в базе хранится только SHA-256 токена
+CREATE TABLE sessions(
+  token_hash bytea PRIMARY KEY, user_id uuid NULL, role text NOT NULL, ref_id uuid NULL,
+  name text NOT NULL, expires_at timestamptz NOT NULL);
+CREATE INDEX ix_sessions_user ON sessions(user_id);
+CREATE INDEX ix_sessions_expires ON sessions(expires_at);"),
     };
 }

@@ -18,6 +18,7 @@ public class Store : IDisposable
 {
     private const string PgUniqueViolation = "23505";
     private const string PgForeignKeyViolation = "23503";
+    public const int MinPasswordLength = 8;
 
     private readonly NpgsqlDataSource _ds;
     private readonly ILogger<Store> _log;
@@ -29,7 +30,7 @@ public class Store : IDisposable
                  ?? "Host=localhost;Port=5432;Database=delivery;Username=delivery;Password=delivery";
         _ds = NpgsqlDataSource.Create(cs);
         Migrator.Apply(_ds, Migrations.All, log: log);
-        SeedIfEmpty();
+        SeedIfEmpty(cfg.GetValue("Seed:Demo", true), cfg["Seed:OperatorPassword"]);
     }
 
     public void Dispose() => _ds.Dispose();
@@ -52,12 +53,22 @@ public class Store : IDisposable
     private static Guid? GuidN(NpgsqlDataReader r, int i) => r.IsDBNull(i) ? null : r.GetGuid(i);
     private static bool IsPg(Exception e, string state) => e is PostgresException p && p.SqlState == state;
 
-    private void SeedIfEmpty()
+    private void SeedIfEmpty(bool demo, string? operatorPassword)
     {
         using var c = Open();
         using var tx = c.BeginTransaction();
         Cmd(c, "SELECT pg_advisory_xact_lock(7272002)").ExecuteNonQuery(); // два экземпляра API не засеют базу дважды
-        if (Count(c, "SELECT COUNT(*) FROM users") == 0) { Seed(c); tx.Commit(); }
+        if (Count(c, "SELECT COUNT(*) FROM users") != 0) return;
+        if (demo) Seed(c);
+        else
+        {
+            // боевой режим: без демо-данных и без предсказуемых паролей — оператор создаётся с заданным паролем
+            if (operatorPassword is null || operatorPassword.Length < MinPasswordLength)
+                throw new InvalidOperationException($"Seed:Demo=false: задайте Seed:OperatorPassword (не короче {MinPasswordLength} символов) для первого входа оператора");
+            AddUser(c, "operator", operatorPassword, "operator", null);
+            _log.LogInformation("База данных пуста: создан оператор без демо-данных");
+        }
+        tx.Commit();
     }
 
     private void Seed(NpgsqlConnection c)
@@ -108,6 +119,49 @@ public class Store : IDisposable
             _ => "Оператор"
         };
         return new Session(role, refId, name ?? login, userId);
+    }
+
+    // ---------- сессии ----------
+    public void SaveSession(byte[] tokenHash, Session s, DateTime expires)
+    {
+        using var c = Open();
+        Cmd(c, "DELETE FROM sessions WHERE expires_at < now()").ExecuteNonQuery();
+        Cmd(c, "INSERT INTO sessions(token_hash,user_id,role,ref_id,name,expires_at) VALUES(@h,@u,@r,@f,@n,@e)",
+            ("h", tokenHash), ("u", s.UserId), ("r", s.Role), ("f", s.RefId), ("n", s.Name), ("e", expires)).ExecuteNonQuery();
+    }
+
+    public Session? LoadSession(byte[] tokenHash)
+    {
+        using var c = Open();
+        using var r = Cmd(c, "SELECT role,ref_id,name,user_id FROM sessions WHERE token_hash=@h AND expires_at > now()", ("h", tokenHash)).ExecuteReader();
+        return r.Read() ? new Session(r.GetString(0), GuidN(r, 1), r.GetString(2), GuidN(r, 3)) : null;
+    }
+
+    public void DeleteSession(byte[] tokenHash)
+    {
+        using var c = Open();
+        Cmd(c, "DELETE FROM sessions WHERE token_hash=@h", ("h", tokenHash)).ExecuteNonQuery();
+    }
+
+    /// <summary>Смена пароля: проверяет старый, сохраняет новый и завершает все остальные сессии пользователя.</summary>
+    public string? ChangePassword(Session me, string? oldPassword, string? newPassword, byte[]? keepSession)
+    {
+        if (me.UserId is not Guid uid) return "FORBIDDEN";
+        if (newPassword is null || newPassword.Length < MinPasswordLength || newPassword == oldPassword) return "WEAK_PASSWORD";
+        using var c = Open();
+        using var tx = c.BeginTransaction();
+        byte[] salt, hash;
+        using (var r = Cmd(c, "SELECT salt,hash FROM users WHERE id=@i FOR UPDATE", ("i", uid)).ExecuteReader())
+        {
+            if (!r.Read()) return "FORBIDDEN";
+            salt = (byte[])r["salt"]; hash = (byte[])r["hash"];
+        }
+        if (oldPassword is null || !CryptographicOperations.FixedTimeEquals(hash, Hash(oldPassword, salt))) return "INVALID_CREDENTIALS";
+        var ns = RandomNumberGenerator.GetBytes(16);
+        Cmd(c, "UPDATE users SET salt=@s,hash=@h WHERE id=@i", ("s", ns), ("h", Hash(newPassword, ns)), ("i", uid)).ExecuteNonQuery();
+        Cmd(c, "DELETE FROM sessions WHERE user_id=@u AND (@k::bytea IS NULL OR token_hash<>@k::bytea)", ("u", uid), ("k", keepSession)).ExecuteNonQuery();
+        tx.Commit();
+        return null;
     }
 
     private static (string login, string password) NewCredentials(string? login, string? password, string prefix)
@@ -598,7 +652,7 @@ public class Store : IDisposable
         }
     }
 
-    /// <summary>Назначает курьера. Без courierId выбирается свободный курьер автоматически (повторное назначение).</summary>
+    /// <summary>Назначает курьера. Без courierId выбирается свободный курьер с наименьшим числом доставок за последние 24 часа (при равенстве — по имени) (повторное назначение).</summary>
     public string? Assign(Guid id, Guid? courierId, Session? actor = null)
     {
         using var c = Open();
@@ -609,7 +663,7 @@ public class Store : IDisposable
             return DeliveryRules.IsFinal(d.Status) ? "DELIVERY_ALREADY_COMPLETED" : "DELIVERY_ALREADY_ASSIGNED";
         (Guid Id, string Name, CourierState State)? cr;
         // FOR UPDATE: один курьер не достанется двум доставкам одновременно; SKIP LOCKED — берём следующего свободного
-        var sel = "SELECT id,name,state FROM couriers WHERE " + (courierId is null ? "state='Available' ORDER BY name FOR UPDATE SKIP LOCKED LIMIT 1" : "id=@c FOR UPDATE");
+        var sel = "SELECT id,name,state FROM couriers WHERE " + (courierId is null ? "state='Available' ORDER BY (SELECT COUNT(*) FROM deliveries d WHERE d.courier_id=couriers.id AND d.created_at > now() - interval '24 hours'), name FOR UPDATE SKIP LOCKED LIMIT 1" : "id=@c FOR UPDATE");
         using (var r = Cmd(c, sel, courierId is null ? Array.Empty<(string, object?)>() : new (string, object?)[] { ("c", courierId) }).ExecuteReader())
             cr = r.Read() ? (r.GetGuid(0), r.GetString(1), Enum.Parse<CourierState>(r.GetString(2))) : null;
         if (cr is null) return courierId is null ? "COURIER_NOT_AVAILABLE" : "COURIER_NOT_FOUND";
@@ -663,6 +717,25 @@ public class Store : IDisposable
             Cmd(c, "UPDATE couriers SET state='Available' WHERE id=@i AND state='Busy'", ("i", cid)).ExecuteNonQuery();
         tx.Commit();
         _log.LogInformation("Доставка {Delivery}: {From} → {To}", id, d.Status, s);
+        return null;
+    }
+
+    /// <summary>Повторная доставка после неудачной: доставка возвращается в Created (история сохраняется), курьер подбирается заново.</summary>
+    public string? Retry(Guid id, Session? actor)
+    {
+        using (var c = Open())
+        using (var tx = c.BeginTransaction())
+        {
+            if (Cmd(c, "SELECT 1 FROM deliveries WHERE id=@i FOR UPDATE", ("i", id)).ExecuteScalar() is null) return "DELIVERY_NOT_FOUND";
+            var d = Deliveries(c, deliveryId: id).First();
+            if (!DeliveryRules.CanRetry(d.Status)) return "DELIVERY_NOT_FAILED";
+            Cmd(c, "UPDATE deliveries SET status='Created',courier_id=NULL,started_at=NULL,finished_at=NULL,failure_reason=NULL WHERE id=@i", ("i", id)).ExecuteNonQuery();
+            Hist(c, id, DeliveryStatus.Created, "Повторная доставка", actor);
+            SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(DeliveryStatus.Created), "Повторная доставка", actor);
+            tx.Commit();
+        }
+        _log.LogInformation("Доставка {Delivery}: повторная попытка", id);
+        TryAutoAssign(id, actor);
         return null;
     }
 

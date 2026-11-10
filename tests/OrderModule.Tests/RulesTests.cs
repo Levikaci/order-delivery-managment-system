@@ -26,9 +26,23 @@ public class RulesTests
     [InlineData(DeliveryStatus.Accepted, OrderStatus.Preparing)]
     [InlineData(DeliveryStatus.InTransit, OrderStatus.InDelivery)]
     [InlineData(DeliveryStatus.Delivered, OrderStatus.Delivered)]
-    [InlineData(DeliveryStatus.Failed, OrderStatus.Cancelled)]
+    [InlineData(DeliveryStatus.Failed, OrderStatus.DeliveryFailed)]
     [InlineData(DeliveryStatus.Cancelled, OrderStatus.Cancelled)]
     public void OrderStatusFollowsDelivery(DeliveryStatus d, OrderStatus o) => Assert.Equal(o, DeliveryRules.ToOrderStatus(d));
+
+    [Fact]
+    public void FailedDelivery_IsNotCancelledOrder() =>
+        Assert.NotEqual(DeliveryRules.ToOrderStatus(DeliveryStatus.Cancelled), DeliveryRules.ToOrderStatus(DeliveryStatus.Failed));
+
+    [Fact]
+    public void EveryDeliveryStatus_HasOrderStatus_AndFinalStatusesHaveNoTransitions()
+    {
+        foreach (var s in Enum.GetValues<DeliveryStatus>())
+        {
+            _ = DeliveryRules.ToOrderStatus(s);
+            if (DeliveryRules.IsFinal(s)) Assert.Empty(DeliveryRules.Next(s));
+        }
+    }
 
     [Fact]
     public void FinalStatuses() =>

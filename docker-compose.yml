@@ -1,12 +1,29 @@
 services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: delivery
+      POSTGRES_USER: delivery
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-delivery}
+    ports:
+      - "5432:5432"   # для запуска API и тестов вне Docker (dotnet run / dotnet test)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U delivery -d delivery"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
   app:
     build: .
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "8080:8080"
     environment:
-      ConnectionStrings__Default: "Data Source=/data/delivery.db"
-    volumes:
-      - delivery-data:/data
+      ConnectionStrings__Default: "Host=db;Port=5432;Database=delivery;Username=delivery;Password=${POSTGRES_PASSWORD:-delivery}"
     restart: unless-stopped
 volumes:
-  delivery-data:
+  pgdata:

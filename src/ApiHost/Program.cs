@@ -5,7 +5,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Порт по умолчанию 8080 (как в клиенте, Docker и README), если адрес не задан --urls / ASPNETCORE_URLS / launchSettings.
 if (string.IsNullOrEmpty(builder.Configuration["urls"]) && string.IsNullOrEmpty(builder.Configuration["http_ports"]))
     builder.WebHost.UseUrls("http://localhost:8080");
-builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(allowIntegerValues: false)));
 builder.Services.AddSingleton<Store>();
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<LoginThrottle>();
@@ -46,8 +46,10 @@ var messages = new Dictionary<string, string>
     ["DELIVERY_NOT_FOUND"] = "Доставка не найдена",
     ["ADDRESS_NOT_FOUND"] = "Адрес не найден",
     ["PRODUCT_NOT_FOUND"] = "Товар не найден",
-    ["INVALID_ADDRESS"] = "Укажите город, улицу и дом",
-    ["INVALID_NAME"] = "Укажите имя",
+    ["INVALID_ADDRESS"] = "Укажите город, улицу и дом (до 100 символов каждое, квартира — до 20)",
+    ["INVALID_NAME"] = "Укажите имя (не длиннее 100 символов)",
+    ["INVALID_PHONE"] = "Телефон: до 32 символов — цифры, пробелы, «+», «-» и скобки",
+    ["INVALID_COMMENT"] = "Комментарий не должен быть длиннее 500 символов",
     ["INVALID_PRODUCT"] = "Укажите название и цену товара",
     ["EMPTY_ORDER"] = "Добавьте в заказ хотя бы один товар",
     ["INVALID_QUANTITY"] = "Количество должно быть от 1 до 99",
@@ -242,6 +244,7 @@ Roles(api.MapPost("/deliveries", (HttpContext h, Store s, CreateDeliveryBody b) 
 Roles(api.MapGet("/deliveries", (HttpContext h, Store s, string? q, DeliveryStatus? status, Guid? courierId, Guid? customerId) =>
 {
     var me = Me(h);
+    if (status is { } st && !Enum.IsDefined(st)) return Err("INVALID_REQUEST"); // числовое значение вне перечисления
     if (me.Role == "client") customerId = me.RefId;
     if (me.Role == "courier") courierId = me.RefId;
     return Results.Ok(s.Deliveries(q, status, courierId, customerId));

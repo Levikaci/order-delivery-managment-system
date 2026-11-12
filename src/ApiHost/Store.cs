@@ -250,6 +250,8 @@ public class Store : IDisposable
     private static (string login, string password, bool generatedLogin, string? error) NewCredentials(string? login, string? password, string prefix)
     {
         var generated = string.IsNullOrWhiteSpace(login);
+        // логин, заданный оператором, проверяется по тем же правилам, что и при самостоятельной регистрации
+        if (!generated && ValidateLogin(login) is { } le) return (login!, password ?? "", false, le);
         login = generated ? $"{prefix}{RandomNumberGenerator.GetInt32(1000, 10000)}" : login!.Trim();
         if (string.IsNullOrWhiteSpace(password)) password = GeneratePassword();
         else if (StartupChecks.IsWeak(password, MinPasswordLength, login)) return (login, password, generated, "WEAK_PASSWORD");
@@ -294,11 +296,17 @@ public class Store : IDisposable
         return id;
     }
 
+    /// <summary>Имя обязательно (до 100 символов), телефон необязателен (до 32 символов).</summary>
+    private static string? ValidatePerson(NewPerson? p) =>
+        p is null ? "INVALID_REQUEST" : CustomerRules.ValidateName(p.Name) ?? CustomerRules.ValidatePhone(p.Phone);
+
+    private static string PhoneOf(NewPerson p) => p.Phone?.Trim() ?? "";
+
     public (object? created, string? error) NewCustomer(NewPerson p)
     {
-        if (CustomerRules.ValidateName(p.Name) is { } e) return (null, e);
-        return CreateWithUser(p, "client", "client", c => AddCustomer(c, p.Name.Trim(), p.Phone),
-            (id, login, pwd) => new { id, name = p.Name.Trim(), phone = p.Phone ?? "", login, password = pwd });
+        if (ValidatePerson(p) is { } e) return (null, e);
+        return CreateWithUser(p, "client", "client", c => AddCustomer(c, p.Name.Trim(), PhoneOf(p)),
+            (id, login, pwd) => new { id, name = p.Name.Trim(), phone = PhoneOf(p), login, password = pwd });
     }
 
     /// <summary>Логин: 3–32 символа — латинские буквы, цифры, точка, дефис, подчёркивание.</summary>
@@ -313,7 +321,7 @@ public class Store : IDisposable
     public (Session? me, string? error) RegisterClient(RegisterRequest? r)
     {
         if (r is null) return (null, "INVALID_REQUEST");
-        if (CustomerRules.ValidateName(r.Name) is { } e) return (null, e);
+        if ((CustomerRules.ValidateName(r.Name) ?? CustomerRules.ValidatePhone(r.Phone)) is { } e) return (null, e);
         if (ValidateLogin(r.Login) is { } le) return (null, le);
         if (string.IsNullOrEmpty(r.Password)) return (null, "WEAK_PASSWORD");
         var phone = string.IsNullOrWhiteSpace(r.Phone) ? null : r.Phone.Trim();
@@ -325,9 +333,9 @@ public class Store : IDisposable
 
     public string? UpdateCustomer(Guid id, NewPerson p)
     {
-        if (CustomerRules.ValidateName(p.Name) is { } e) return e;
+        if (ValidatePerson(p) is { } e) return e;
         using var c = Open();
-        return Cmd(c, "UPDATE customers SET name=@n,phone=@p WHERE id=@i", ("n", p.Name.Trim()), ("p", p.Phone ?? ""), ("i", id)).ExecuteNonQuery() == 0 ? "CUSTOMER_NOT_FOUND" : null;
+        return Cmd(c, "UPDATE customers SET name=@n,phone=@p WHERE id=@i", ("n", p.Name.Trim()), ("p", PhoneOf(p)), ("i", id)).ExecuteNonQuery() == 0 ? "CUSTOMER_NOT_FOUND" : null;
     }
 
     public string? DeleteCustomer(Guid id)
@@ -396,7 +404,8 @@ public class Store : IDisposable
 
     public (SavedAddress? a, string? error) AddAddress(Guid customerId, AddressRequest r)
     {
-        if (CustomerRules.ValidateAddress(r.City, r.Street, r.House) is { } e) return (null, e);
+        if (r is null) return (null, "INVALID_REQUEST");
+        if (CustomerRules.ValidateAddress(r.City, r.Street, r.House, r.Apartment, r.Label) is { } e) return (null, e);
         using var c = Open();
         if (Count(c, "SELECT COUNT(*) FROM customers WHERE id=@i", ("i", customerId)) == 0) return (null, "CUSTOMER_NOT_FOUND");
         var id = AddAddr(c, customerId, r.Label?.Trim() ?? "", r.City, r.Street, r.House, r.Apartment);
@@ -405,7 +414,8 @@ public class Store : IDisposable
 
     public string? UpdateAddress(Guid id, AddressRequest r)
     {
-        if (CustomerRules.ValidateAddress(r.City, r.Street, r.House) is { } e) return e;
+        if (r is null) return "INVALID_REQUEST";
+        if (CustomerRules.ValidateAddress(r.City, r.Street, r.House, r.Apartment, r.Label) is { } e) return e;
         using var c = Open();
         return Cmd(c, "UPDATE customer_addresses SET label=@l,city=@c,street=@s,house=@h,apartment=@a WHERE id=@i",
             ("l", r.Label?.Trim() ?? ""), ("c", r.City.Trim()), ("s", r.Street.Trim()), ("h", r.House.Trim()),
@@ -428,16 +438,16 @@ public class Store : IDisposable
 
     public (object? created, string? error) NewCourier(NewPerson p)
     {
-        if (CustomerRules.ValidateName(p.Name) is { } e) return (null, e);
-        return CreateWithUser(p, "courier", "courier", c => AddCourier(c, p.Name.Trim(), p.Phone),
-            (id, login, pwd) => new { id, name = p.Name.Trim(), phone = p.Phone ?? "", state = CourierState.Available, available = true, login, password = pwd });
+        if (ValidatePerson(p) is { } e) return (null, e);
+        return CreateWithUser(p, "courier", "courier", c => AddCourier(c, p.Name.Trim(), PhoneOf(p)),
+            (id, login, pwd) => new { id, name = p.Name.Trim(), phone = PhoneOf(p), state = CourierState.Available, available = true, login, password = pwd });
     }
 
     public string? UpdateCourier(Guid id, NewPerson p)
     {
-        if (CustomerRules.ValidateName(p.Name) is { } e) return e;
+        if (ValidatePerson(p) is { } e) return e;
         using var c = Open();
-        return Cmd(c, "UPDATE couriers SET name=@n,phone=@p WHERE id=@i", ("n", p.Name.Trim()), ("p", p.Phone ?? ""), ("i", id)).ExecuteNonQuery() == 0 ? "COURIER_NOT_FOUND" : null;
+        return Cmd(c, "UPDATE couriers SET name=@n,phone=@p WHERE id=@i", ("n", p.Name.Trim()), ("p", PhoneOf(p)), ("i", id)).ExecuteNonQuery() == 0 ? "COURIER_NOT_FOUND" : null;
     }
 
     public string? DeleteCourier(Guid id)
@@ -476,6 +486,7 @@ public class Store : IDisposable
 
     public string? SetCourierState(Guid id, CourierState state, bool byOperator)
     {
+        if (!Enum.IsDefined(state)) return "INVALID_REQUEST";
         using var c = Open();
         using var tx = c.BeginTransaction();
         var cur = Cmd(c, "SELECT state FROM couriers WHERE id=@i FOR UPDATE", ("i", id)).ExecuteScalar() as string;
@@ -505,7 +516,8 @@ public class Store : IDisposable
         return l;
     }
 
-    private static bool ValidProduct(ProductRequest r) => !string.IsNullOrWhiteSpace(r.Name) && Money.IsValidPrice(r.Price);
+    private static bool ValidProduct(ProductRequest? r) =>
+        r is not null && !string.IsNullOrWhiteSpace(r.Name) && r.Name.Trim().Length <= 100 && Money.IsValidPrice(r.Price);
 
     public (Product? p, string? error) NewProduct(ProductRequest r)
     {
@@ -535,6 +547,9 @@ public class Store : IDisposable
         return Deliveries(c, q, status, courierId, customerId);
     }
 
+    /// <summary>Экранирует служебные символы шаблона LIKE: «%» и «_» в строке поиска ищутся как обычные символы.</summary>
+    internal static string EscapeLike(string s) => s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
     private static List<Delivery> Deliveries(NpgsqlConnection c, string? q = null, DeliveryStatus? status = null, Guid? courierId = null, Guid? customerId = null, Guid? deliveryId = null, Guid? orderId = null)
     {
         var sql = @"SELECT d.id,d.order_id,o.customer_id,d.courier_id,o.address,o.comment,d.status,o.status,o.created_at,
@@ -545,7 +560,7 @@ public class Store : IDisposable
         {
             sql += @" AND (o.address ILIKE @q OR o.comment ILIKE @q OR d.id::text ILIKE @q OR o.id::text ILIKE @q
                        OR EXISTS(SELECT 1 FROM order_items i WHERE i.order_id=o.id AND i.name ILIKE @q))";
-            ps.Add(("q", "%" + q.Trim() + "%"));
+            ps.Add(("q", "%" + EscapeLike(q.Trim()) + "%"));
         }
         if (status is not null) { sql += " AND d.status=@s"; ps.Add(("s", status.ToString())); }
         if (courierId is not null) { sql += " AND d.courier_id=@c"; ps.Add(("c", courierId)); }
@@ -650,7 +665,7 @@ public class Store : IDisposable
             var a = Addresses(c, customerId, aid).FirstOrDefault();
             return a is null ? (null, null, "ADDRESS_NOT_FOUND") : (a.Text, null, null);
         }
-        if (inline is null || CustomerRules.ValidateAddress(inline.City, inline.Street, inline.House) is { } e) return (null, null, "INVALID_ADDRESS");
+        if (inline is null || CustomerRules.ValidateAddress(inline.City, inline.Street, inline.House, inline.Apartment) is { } e) return (null, null, "INVALID_ADDRESS");
         return (inline.ToString(), inline, null);
     }
 
@@ -658,6 +673,7 @@ public class Store : IDisposable
     public (Delivery? d, bool courierAssigned, string? error) CreateOrder(CreateOrderRequest r, Session? actor = null)
     {
         if (r is null) return (null, false, "INVALID_REQUEST");
+        if (CustomerRules.ValidateComment(r.Comment) is { } ce) return (null, false, ce);
         Guid id;
         var fingerprint = r.RequestId is null ? null : r.Fingerprint();
         using (var c = Open())
@@ -757,6 +773,8 @@ public class Store : IDisposable
     /// <summary>Изменяет состав, адрес и/или комментарий. Каждое реальное изменение пишется в журнал с автором и временем.</summary>
     public string? UpdateOrder(Guid orderId, UpdateOrderRequest r, Session? actor = null)
     {
+        if (r is null) return "INVALID_REQUEST";
+        if (CustomerRules.ValidateComment(r.Comment) is { } ce) return ce;
         using var c = Open();
         using var tx = c.BeginTransaction();
         if (Cmd(c, "SELECT 1 FROM orders WHERE id=@i FOR UPDATE", ("i", orderId)).ExecuteScalar() is null) return "ORDER_NOT_FOUND";
@@ -947,6 +965,8 @@ public class Store : IDisposable
 
     public string? ChangeStatus(Guid id, DeliveryStatus s, string? comment, Session? actor = null)
     {
+        if (!Enum.IsDefined(s)) return "INVALID_REQUEST";
+        if (CustomerRules.ValidateComment(comment) is { } ce) return ce;
         using var c = Open();
         using var tx = c.BeginTransaction();
         if (Cmd(c, "SELECT 1 FROM deliveries WHERE id=@i FOR UPDATE", ("i", id)).ExecuteScalar() is null) return "DELIVERY_NOT_FOUND";

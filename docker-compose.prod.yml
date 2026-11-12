@@ -38,6 +38,9 @@ services:
       # самостоятельная регистрация клиентов (POST /api/auth/register) и её лимит с одного адреса в час
       Security__AllowRegistration: "${ALLOW_REGISTRATION:-true}"
       Security__MaxRegistrationsPerHour: "${MAX_REGISTRATIONS_PER_HOUR:-20}"
+      # если перед API стоит обратный прокси: его адрес или подсеть, чтобы адрес клиента брался из X-Forwarded-For
+      ForwardedHeaders__KnownProxies: "${TRUSTED_PROXIES:-}"
+      ForwardedHeaders__KnownNetworks: "${TRUSTED_NETWORKS:-}"
     restart: unless-stopped
 networks:
   backend:

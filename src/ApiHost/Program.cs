@@ -13,7 +13,22 @@ builder.Services.AddSingleton<RegistrationThrottle>();
 // повторное автоназначение курьеров доставкам, оставшимся в статусе Created (сбой БД, нет свободных курьеров)
 builder.Services.AddHostedService<AssignmentRetryService>();
 
+// За обратным прокси (nginx и т. п.) адрес клиента берётся из X-Forwarded-For, но только от доверенных прокси:
+// иначе любой клиент подделал бы заголовок и обошёл ограничения попыток входа и регистрации.
+var proxies = builder.Configuration["ForwardedHeaders:KnownProxies"] ?? "";
+var networks = builder.Configuration["ForwardedHeaders:KnownNetworks"] ?? "";
+var useForwarded = builder.Configuration.GetValue("ForwardedHeaders:Enabled", false) || proxies.Trim().Length > 0 || networks.Trim().Length > 0;
+if (useForwarded)
+    builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(o =>
+    {
+        o.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+        o.ForwardLimit = 1; // учитывается только адрес, добавленный ближайшим доверенным прокси
+        foreach (var p in proxies.Split(',', ';', ' ').Where(x => x.Length > 0)) o.KnownProxies.Add(System.Net.IPAddress.Parse(p));
+        foreach (var n in networks.Split(',', ';', ' ').Where(x => x.Length > 0)) o.KnownNetworks.Add(Microsoft.AspNetCore.HttpOverrides.IPNetwork.Parse(n));
+    });
+
 var app = builder.Build();
+if (useForwarded) app.UseForwardedHeaders();
 // Вне Development сервер не стартует со стандартными паролями, демо-пользователями и без строки подключения.
 StartupChecks.EnsureValid(app.Configuration, app.Environment);
 app.Services.GetRequiredService<Store>(); // применить миграции при старте: при ошибке приложение не запускается с повреждённой схемой
@@ -116,7 +131,7 @@ api.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 // --- вход ---
 api.MapPost("/auth/login", (HttpContext h, Store s, AuthService a, LoginThrottle t, LoginRequest r) =>
 {
-    var ip = h.Connection.RemoteIpAddress?.ToString();
+    var ip = h.Connection.RemoteIpAddress?.ToString(); // с учётом X-Forwarded-For от доверенного прокси
     if (t.IsLocked(r?.Login, ip)) return Err("TOO_MANY_ATTEMPTS");
     if (s.Authenticate(r?.Login, r?.Password) is not { } me)
     {

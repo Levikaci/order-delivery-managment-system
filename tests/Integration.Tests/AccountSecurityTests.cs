@@ -140,4 +140,24 @@ public class AccountSecurityTests : ApiTests
         Assert.Equal((HttpStatusCode)429, r.StatusCode);
     }
 
+    [Fact]
+    public async Task ForwardedFor_FromTrustedProxy_SeparatesClients()
+    {
+        using var f = F.WithSettings(new() { ["ForwardedHeaders:KnownProxies"] = "127.0.0.1" }, remoteIp: "127.0.0.1");
+        HttpClient From(string ip) { var c = f.CreateClient(); c.DefaultRequestHeaders.Add("X-Forwarded-For", ip); return c; }
+
+        for (var i = 0; i < 5; i++) await From("203.0.113.5").PostAsync("/api/auth/login", Json("""{"login":"ivan","password":"guess"}"""));
+        Assert.Equal((HttpStatusCode)429, (await From("203.0.113.5").PostAsync("/api/auth/login", Json("""{"login":"ivan","password":"ivan"}"""))).StatusCode);
+        // настоящий владелец с другого адреса за тем же прокси входит
+        Assert.Equal(HttpStatusCode.OK, (await From("198.51.100.7").PostAsync("/api/auth/login", Json("""{"login":"ivan","password":"ivan"}"""))).StatusCode);
+    }
+
+    [Fact]
+    public async Task ForwardedFor_WithoutTrustedProxy_IsIgnored()
+    {
+        HttpClient From(string ip) { var c = F.CreateClient(); c.DefaultRequestHeaders.Add("X-Forwarded-For", ip); return c; }
+        for (var i = 0; i < 5; i++) await From($"203.0.113.{i}").PostAsync("/api/auth/login", Json("""{"login":"ivan","password":"guess"}"""));
+        // подмена заголовка не обходит ограничение: все попытки считаются с одного адреса
+        Assert.Equal((HttpStatusCode)429, (await From("203.0.113.99").PostAsync("/api/auth/login", Json("""{"login":"ivan","password":"ivan"}"""))).StatusCode);
+    }
 }

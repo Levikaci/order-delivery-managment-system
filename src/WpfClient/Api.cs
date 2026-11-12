@@ -31,7 +31,19 @@ public class Api
     public async Task LoginAsync(string login, string password)
     {
         var r = await SendAsync(HttpMethod.Post, "api/auth/login", new { login, password });
-        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", r!["token"]!.GetValue<string>());
+        ApplySession(r!, login);
+    }
+
+    /// <summary>Самостоятельная регистрация клиента; после неё сразу выполняется вход.</summary>
+    public async Task RegisterAsync(string name, string? phone, string login, string password)
+    {
+        var r = await SendAsync(HttpMethod.Post, "api/auth/register", new { name, phone, login, password });
+        ApplySession(r!, login);
+    }
+
+    private void ApplySession(JsonNode r, string login)
+    {
+        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", r["token"]!.GetValue<string>());
         Role = r["role"]!.GetValue<string>();
         RefId = Guid.TryParse(r["refId"]?.ToString(), out var g) ? g : null;
         UserName = r["name"]?.ToString() ?? login;

@@ -25,7 +25,6 @@
     <ProjectReference Include="..\..\src\CourierModule\CourierModule.csproj" />
     <ProjectReference Include="..\..\src\CustomerModule\CustomerModule.csproj" />
     <ProjectReference Include="..\..\src\ApiHost\ApiHost.csproj" />
-    <ProjectReference Include="..\..\tools\SqliteImport\SqliteImport.csproj" />
   </ItemGroup>
 
   <ItemGroup>

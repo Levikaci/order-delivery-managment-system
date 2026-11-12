@@ -48,7 +48,7 @@ Created -> Assigned -> Accepted -> InTransit -> Delivered
 
 ## Фактическое состояние
 
-171 автоматический тест (41 модульный + 130 интеграционных; `dotnet test OrderDeliveryManagementSystem.sln`, все проходят). Интеграционные тесты работают на **реальном PostgreSQL**: каждый тест создаёт и удаляет собственную базу.
+167 автоматических тестов (41 модульный + 126 интеграционных; `dotnet test OrderDeliveryManagementSystem.sln`, все проходят). Интеграционные тесты работают на **реальном PostgreSQL**: каждый тест создаёт и удаляет собственную базу.
 
 Подключение к серверу — переменная `TEST_PG_ADMIN` (строка подключения с правом `CREATE DATABASE`); по умолчанию `Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=postgres`. Быстрый старт: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`. В CI — service-контейнер (`.github/workflows/ci.yml`).
 
@@ -58,7 +58,6 @@ Created -> Assigned -> Accepted -> InTransit -> Delivered
 | `OrderModule.Tests/MoneyTests` | точность копеек, округление, 0.1+0.1+0.1, переполнение, границы цены |
 | `Integration.Tests/ScenarioTests` | сценарии ТЗ на `Store`: создание, автоназначение, нет курьера, повторное назначение, полный цикл, отмена, неудача, права ролей, адреса, редактирование, справочники |
 | `Integration.Tests/MigrationTests` | миграции: чистая БД, повторный запуск, обновление с данными, откат неудачной миграции, чужая и более новая схема, параллельный старт, перезапуск |
-| `Integration.Tests/SqliteImportTests` | перенос SQLite v2 → PostgreSQL: данные, копейки, `DeliveryFailed`, вход после импорта, отказы |
 | `Integration.Tests/ReliabilityTests` | отказы БД (откат, повтор), идемпотентность `requestId`, параллельные назначения и дубли, сохранение комментария |
 | `Integration.Tests/ChangeLogTests` | журнал изменений: значения, автор, время, no-op, очистка, перезапуск, `actor_id` |
 | `Integration.Tests/ApiTests` | HTTP: матрица роль × endpoint (401/403), изоляция клиентов, права на статусы, некорректный ввод, полные циклы, деньги, перезапуск приложения, 500 `STORAGE_ERROR` |

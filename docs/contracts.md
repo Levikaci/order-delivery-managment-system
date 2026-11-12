@@ -171,7 +171,7 @@ DeliveryDto
 | `GET /api/orders/{id}/changes` | Журнал изменений заказа (оператор и владелец-клиент) |
 | Заказ / доставка | В ответ добавлены `orderStatus`, `changes[]` (`at`, `actorId`, `actorName`, `field` = `Items`/`Address`/`Comment`, `oldValue`, `newValue`); записи истории содержат `actorId` |
 | `OrderStatus` | Новое значение `DeliveryFailed` (ADR-006) |
-| Ошибки | `STORAGE_ERROR` (500, сбой хранилища, в том числе недоступность БД по сети), `INTERNAL_ERROR` (500), `INVALID_REQUEST` (400, некорректный JSON), `IDEMPOTENCY_CONFLICT` (409), `TOO_MANY_ATTEMPTS` (429, вход временно заблокирован), `WEAK_PASSWORD` (400, также при создании клиента/курьера со слабым паролем) в том же формате `{success, errorCode, error, message}` |
+| Ошибки | `STORAGE_ERROR` (503 с заголовком `Retry-After`, если БД временно недоступна: нет соединения, таймаут, перезапуск сервера; 500 — прочие ошибки хранилища), `INTERNAL_ERROR` (500), `INVALID_REQUEST` (400, некорректный JSON), `IDEMPOTENCY_CONFLICT` (409), `TOO_MANY_ATTEMPTS` (429, вход временно заблокирован), `WEAK_PASSWORD` (400, также при создании клиента/курьера со слабым паролем) в том же формате `{success, errorCode, error, message}` |
 | Назначение курьера | Доставки `Created` без курьера назначаются фоновой службой (`AssignmentRetryService`); ручное `POST /api/deliveries/{id}/assign` работает как прежде. Повторное назначение уже назначенной доставки — `409 DELIVERY_ALREADY_ASSIGNED`; курьер с активной доставкой — `409 COURIER_BUSY` |
 | Внутренний интерфейс | `IDeliveryService` / `CreateDeliveryRequest` из «Протокола 1» **удалены**: создание доставки — `Store.CreateDelivery` и `POST /api/deliveries`; повтор по `orderId` идемпотентен (`DELIVERY_ALREADY_EXISTS`, 409) |
 

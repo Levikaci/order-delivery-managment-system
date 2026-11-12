@@ -56,9 +56,9 @@ var messages = new Dictionary<string, string>
     ["INTERNAL_ERROR"] = "Внутренняя ошибка сервера",
 };
 
-IResult Err(string code)
+IResult Err(string code, int? statusOverride = null)
 {
-    var status = code switch
+    var status = statusOverride ?? code switch
     {
         "UNAUTHORIZED" or "INVALID_CREDENTIALS" => 401,
         "TOO_MANY_ATTEMPTS" => 429,
@@ -79,10 +79,18 @@ app.UseExceptionHandler(h => h.Run(async ctx =>
     var code = ex switch
     {
         BadHttpRequestException or System.Text.Json.JsonException => "INVALID_REQUEST",
-        _ when Store.IsTransient(ex) => "STORAGE_ERROR", // в том числе сетевые ошибки при недоступной БД
+        _ when Store.IsStorageError(ex) => "STORAGE_ERROR", // в том числе сетевые ошибки при недоступной БД
         _ => "INTERNAL_ERROR"
     };
     if (code != "INVALID_REQUEST") ctx.RequestServices.GetRequiredService<ILogger<Program>>().LogError(ex, "Необработанная ошибка запроса {Path}", ctx.Request.Path);
+    // база временно недоступна (нет соединения, таймаут) — 503 и Retry-After: запрос можно повторить;
+    // ошибка данных или SQL — 500, повтор того же запроса не поможет
+    if (code == "STORAGE_ERROR" && Store.IsTransient(ex))
+    {
+        ctx.Response.Headers.RetryAfter = "5";
+        await Err(code, 503).ExecuteAsync(ctx);
+        return;
+    }
     await Err(code).ExecuteAsync(ctx);
 }));
 

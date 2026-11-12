@@ -245,11 +245,25 @@ public class AssignmentRetryServiceTests
     [Fact]
     public void TransientErrors_IncludeNetworkFailures()
     {
-        Assert.True(Store.IsTransient(new NpgsqlException("connection refused")));
+        Assert.True(Store.IsTransient(new NpgsqlException("connection refused", new System.Net.Sockets.SocketException(10061))));
         Assert.True(Store.IsTransient(new System.Net.Sockets.SocketException(11001)));             // имя хоста БД не разрешается
         Assert.True(Store.IsTransient(new InvalidOperationException("x", new TimeoutException())));
+        Assert.True(Store.IsTransient(new PostgresException("terminating connection", "FATAL", "FATAL", "57P01"))); // перезапуск сервера БД
         Assert.False(Store.IsTransient(new InvalidOperationException("bug")));
         Assert.False(Store.IsTransient(null));
+    }
+
+    [Fact]
+    public void DataErrors_AreStorageErrors_ButNotTransient()
+    {
+        var fk = new PostgresException("violates foreign key", "ERROR", "ERROR", "23503");
+        var trigger = new PostgresException("injected", "ERROR", "ERROR", "P0001");
+        Assert.True(Store.IsStorageError(fk));
+        Assert.True(Store.IsStorageError(trigger));
+        Assert.False(Store.IsTransient(fk));                                   // повтор того же запроса не поможет
+        Assert.False(Store.IsTransient(trigger));
+        Assert.True(Store.IsStorageError(new NpgsqlException("connection refused")));
+        Assert.False(Store.IsStorageError(new InvalidOperationException("bug")));
     }
 
     [Fact]

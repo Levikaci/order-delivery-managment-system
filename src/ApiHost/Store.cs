@@ -58,13 +58,28 @@ public class Store : IDisposable
     private static bool IsPg(Exception e, string state) => e is PostgresException p && p.SqlState == state;
 
     /// <summary>
-    /// Временный сбой хранилища: ошибка PostgreSQL/Npgsql, таймаут или сетевая ошибка. Когда база остановлена,
-    /// Npgsql может выбросить SocketException (адрес хоста не разрешается) без обёртки в NpgsqlException.
+    /// Ошибка хранилища: любая ошибка PostgreSQL/Npgsql, таймаут или сетевая ошибка. Клиент получает STORAGE_ERROR
+    /// без подробностей. Когда база остановлена, Npgsql может выбросить SocketException без обёртки в NpgsqlException.
+    /// </summary>
+    public static bool IsStorageError(Exception? e)
+    {
+        for (; e is not null; e = e.InnerException)
+            if (e is DbException or TimeoutException or System.Net.Sockets.SocketException or IOException) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Временная недоступность хранилища, которая проходит сама: нет соединения, таймаут, перезапуск сервера БД,
+    /// взаимоблокировка. Ошибки данных и SQL (нарушение ограничения, ошибка в триггере) временными не считаются:
+    /// повтор того же запроса к ним не приведёт к успеху.
     /// </summary>
     public static bool IsTransient(Exception? e)
     {
         for (; e is not null; e = e.InnerException)
-            if (e is DbException or TimeoutException or System.Net.Sockets.SocketException or IOException) return true;
+        {
+            if (e is NpgsqlException { IsTransient: true } or TimeoutException or System.Net.Sockets.SocketException or IOException) return true;
+            if (e is PostgresException) return false;
+        }
         return false;
     }
 
@@ -720,7 +735,7 @@ public class Store : IDisposable
     private bool TryAutoAssign(Guid deliveryId, Session? actor)
     {
         try { return Assign(deliveryId, null, actor) is null; }
-        catch (Exception ex) when (IsTransient(ex))
+        catch (Exception ex) when (IsStorageError(ex))
         {
             // заказ уже сохранён, доставка осталась Created: её подхватит фоновое назначение или оператор
             _log.LogError(ex, "Не удалось автоматически назначить курьера для доставки {DeliveryId}, повтор — в фоне", deliveryId);

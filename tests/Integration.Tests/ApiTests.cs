@@ -458,4 +458,23 @@ public class ApiScenarioTests : ApiTests
         F.Db.Sql("DROP TRIGGER trap ON deliveries");
         Assert.Equal(HttpStatusCode.OK, (await ivan.PostAsync("/api/orders", Json(OrderJson(ivanId, pizza)))).StatusCode);
     }
+
+    [Fact]
+    public async Task TemporaryDatabaseUnavailability_Returns503_WithRetryAfter()
+    {
+        using var op = await LoginAsync("operator");
+        var (pizza, _, ivanId) = await DemoIds(op);
+        using var ivan = await LoginAsync("ivan");
+        // сервер БД завершает соединение (код 57P01, как при перезапуске PostgreSQL) — сбой временный
+        F.Db.Sql(@"CREATE FUNCTION shutdown_boom() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'restarting' USING ERRCODE = '57P01'; END $$ LANGUAGE plpgsql;
+                   CREATE TRIGGER trap2 BEFORE INSERT ON deliveries FOR EACH ROW EXECUTE FUNCTION shutdown_boom();");
+        var r = await ivan.PostAsync("/api/orders", Json(OrderJson(ivanId, pizza)));
+        F.Db.Sql("DROP TRIGGER trap2 ON deliveries");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, r.StatusCode);
+        Assert.NotNull(r.Headers.RetryAfter);
+        var b = await Body(r);
+        Assert.Equal("STORAGE_ERROR", b["errorCode"]!.ToString());
+        Assert.DoesNotContain("restarting", b.ToJsonString());
+        Assert.Equal(0, F.Db.Scalar<long>("SELECT COUNT(*) FROM orders"));
+    }
 }

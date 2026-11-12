@@ -205,7 +205,7 @@ dotnet test OrderDeliveryManagementSystem.sln
 
 Подробнее — в [docs/contracts.md](docs/contracts.md); соответствие ТЗ — в [docs/tz-traceability.md](docs/tz-traceability.md).
 
-Ошибки сервера (`STORAGE_ERROR`, `INTERNAL_ERROR`) и некорректный JSON (`INVALID_REQUEST`) тоже приходят в едином формате ошибок.
+Ошибки сервера (`STORAGE_ERROR`, `INTERNAL_ERROR`) и некорректный JSON (`INVALID_REQUEST`) тоже приходят в едином формате ошибок. Если база данных временно недоступна, `STORAGE_ERROR` возвращается с кодом 503 и заголовком `Retry-After` — запрос можно повторить (создание заказа — с тем же `requestId`).
 
 ## Версии и история изменений
 Версия — `Directory.Build.props` (сейчас 2.2.0, семантическое версионирование), список изменений — [CHANGELOG.md](CHANGELOG.md). Сообщения коммитов — [Conventional Commits](https://www.conventionalcommits.org/ru/v1.0.0/) (`feat`, `fix`, `refactor`, `test`, `docs`, `build`, `chore`).

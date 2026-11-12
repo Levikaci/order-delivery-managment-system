@@ -301,6 +301,14 @@ public class Store : IDisposable
         while (r.Read()) l.Add(new Customer(r.GetGuid(0), r.GetString(1), r.GetString(2)));
         return l;
     }
+    private static List<Customer> CustomersByIds(NpgsqlConnection c, Guid[] ids)
+    {
+        var l = new List<Customer>();
+        if (ids.Length == 0) return l;
+        using var r = Cmd(c, "SELECT id,name,phone FROM customers WHERE id = ANY(@i) ORDER BY name", ("i", ids)).ExecuteReader();
+        while (r.Read()) l.Add(new Customer(r.GetGuid(0), r.GetString(1), r.GetString(2)));
+        return l;
+    }
     public Customer? Customer(Guid id)
     {
         using var c = Open();
@@ -400,6 +408,15 @@ public class Store : IDisposable
     {
         using var r = Cmd(c, "SELECT id,name,phone,state FROM couriers" + (onlyAvailable ? " WHERE state='Available'" : "") + " ORDER BY name").ExecuteReader();
         var l = new List<Courier>();
+        while (r.Read()) l.Add(new Courier(r.GetGuid(0), r.GetString(1), r.GetString(2), Enum.Parse<CourierState>(r.GetString(3))));
+        return l;
+    }
+
+    private static List<Courier> CouriersByIds(NpgsqlConnection c, Guid[] ids)
+    {
+        var l = new List<Courier>();
+        if (ids.Length == 0) return l;
+        using var r = Cmd(c, "SELECT id,name,phone,state FROM couriers WHERE id = ANY(@i) ORDER BY name", ("i", ids)).ExecuteReader();
         while (r.Read()) l.Add(new Courier(r.GetGuid(0), r.GetString(1), r.GetString(2), Enum.Parse<CourierState>(r.GetString(3))));
         return l;
     }
@@ -953,24 +970,26 @@ public class Store : IDisposable
             "courier" => Deliveries(c, courierId: me.RefId ?? Guid.Empty),
             _ => Deliveries(c)
         };
-        var customers = Customers(c);
-        var couriers = Couriers(c);
-        var addresses = Addresses(c);
+        List<Customer> customers;
+        List<Courier> couriers;
+        List<SavedAddress> addresses;
         if (me?.Role == "client")
         {
-            deliveries = deliveries.Where(d => d.CustomerId == me.RefId).ToList();
-            customers = customers.Where(x => x.Id == me.RefId).ToList();
-            addresses = addresses.Where(a => a.CustomerId == me.RefId).ToList();
-            var ids = deliveries.Select(d => d.CourierId).ToHashSet();
-            couriers = couriers.Where(x => ids.Contains(x.Id)).ToList();
+            customers = CustomersByIds(c, me.RefId is Guid cid ? new[] { cid } : Array.Empty<Guid>());
+            addresses = me.RefId is Guid aid ? Addresses(c, aid) : new();
+            couriers = CouriersByIds(c, deliveries.Where(d => d.CourierId is not null).Select(d => d.CourierId!.Value).Distinct().ToArray());
         }
         else if (me?.Role == "courier")
         {
-            deliveries = deliveries.Where(d => d.CourierId == me.RefId).ToList();
-            var cu = deliveries.Select(d => d.CustomerId).ToHashSet();
-            customers = customers.Where(x => cu.Contains(x.Id)).ToList();
-            couriers = couriers.Where(x => x.Id == me.RefId).ToList();
+            customers = CustomersByIds(c, deliveries.Select(d => d.CustomerId).Distinct().ToArray());
+            couriers = CouriersByIds(c, me.RefId is Guid rid ? new[] { rid } : Array.Empty<Guid>());
             addresses = new();
+        }
+        else
+        {
+            customers = Customers(c);
+            couriers = Couriers(c);
+            addresses = Addresses(c);
         }
         return new
         {

@@ -532,10 +532,26 @@ public partial class MainWindow : Window
         if (dlg.ShowDialog() != true) return;
         if (existing is null)
         {
-            var r = await Api.PostAsync("api/orders", dlg.Body);
+            var r = await CreateOrderWithRetryAsync(dlg.Body);
             MsgDialog.Info(this, "Заказ оформлен", r?["message"]?.ToString() ?? "Заказ создан");
         }
         else await Api.PutAsync($"api/orders/{existing["orderId"]}", dlg.Body);
+    }
+
+    /// <summary>
+    /// Создание заказа с повтором при обрыве связи или временной ошибке сервера. Тело (и requestId) не меняется,
+    /// поэтому если первый запрос успел дойти до сервера, повтор вернёт тот же заказ, а не создаст второй.
+    /// </summary>
+    private async Task<JsonNode?> CreateOrderWithRetryAsync(Dictionary<string, object?> body)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { return await Api.PostAsync("api/orders", body); }
+            catch (ApiException ex) when (ex.Code is "NO_CONNECTION" or "STORAGE_ERROR" && attempt < 3)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(attempt));
+            }
+        }
     }
 
     // ---------- справочники оператора

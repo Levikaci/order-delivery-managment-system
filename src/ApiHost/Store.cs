@@ -272,7 +272,12 @@ public class Store : IDisposable
         while (r.Read()) l.Add(new Customer(r.GetGuid(0), r.GetString(1), r.GetString(2)));
         return l;
     }
-    public Customer? Customer(Guid id) => Customers().FirstOrDefault(x => x.Id == id);
+    public Customer? Customer(Guid id)
+    {
+        using var c = Open();
+        using var r = Cmd(c, "SELECT id,name,phone FROM customers WHERE id=@i", ("i", id)).ExecuteReader();
+        return r.Read() ? new Customer(r.GetGuid(0), r.GetString(1), r.GetString(2)) : null;
+    }
 
     // ---------- адреса клиента ----------
     private static Guid AddAddr(NpgsqlConnection c, Guid customerId, string label, string city, string street, string house, string? apt)
@@ -284,18 +289,20 @@ public class Store : IDisposable
         return id;
     }
 
-    private static List<SavedAddress> Addresses(NpgsqlConnection c, Guid? customerId = null)
+    private static List<SavedAddress> Addresses(NpgsqlConnection c, Guid? customerId = null, Guid? addressId = null)
     {
-        using var r = Cmd(c, "SELECT id,customer_id,label,city,street,house,apartment FROM customer_addresses"
-            + (customerId is null ? "" : " WHERE customer_id=@c") + " ORDER BY label,street",
-            customerId is null ? Array.Empty<(string, object?)>() : new (string, object?)[] { ("c", customerId) }).ExecuteReader();
+        var ps = new List<(string, object?)>();
+        var sql = "SELECT id,customer_id,label,city,street,house,apartment FROM customer_addresses WHERE 1=1";
+        if (customerId is not null) { sql += " AND customer_id=@c"; ps.Add(("c", customerId)); }
+        if (addressId is not null) { sql += " AND id=@a"; ps.Add(("a", addressId)); }
+        using var r = Cmd(c, sql + " ORDER BY label,street", ps.ToArray()).ExecuteReader();
         var l = new List<SavedAddress>();
         while (r.Read()) l.Add(new SavedAddress(r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetString(3), r.GetString(4), r.GetString(5), Str(r, 6)));
         return l;
     }
 
     public List<SavedAddress> Addresses(Guid customerId) { using var c = Open(); return Addresses(c, customerId); }
-    public SavedAddress? Address(Guid id) { using var c = Open(); return Addresses(c).FirstOrDefault(a => a.Id == id); }
+    public SavedAddress? Address(Guid id) { using var c = Open(); return Addresses(c, addressId: id).FirstOrDefault(); }
 
     public (SavedAddress? a, string? error) AddAddress(Guid customerId, AddressRequest r)
     {
@@ -303,7 +310,7 @@ public class Store : IDisposable
         using var c = Open();
         if (Count(c, "SELECT COUNT(*) FROM customers WHERE id=@i", ("i", customerId)) == 0) return (null, "CUSTOMER_NOT_FOUND");
         var id = AddAddr(c, customerId, r.Label?.Trim() ?? "", r.City, r.Street, r.House, r.Apartment);
-        return (Addresses(c, customerId).First(a => a.Id == id), null);
+        return (Addresses(c, customerId, id).First(), null);
     }
 
     public string? UpdateAddress(Guid id, AddressRequest r)
@@ -541,7 +548,7 @@ public class Store : IDisposable
     {
         if (addressId is Guid aid)
         {
-            var a = Addresses(c, customerId).FirstOrDefault(x => x.Id == aid);
+            var a = Addresses(c, customerId, aid).FirstOrDefault();
             return a is null ? (null, null, "ADDRESS_NOT_FOUND") : (a.Text, null, null);
         }
         if (inline is null || CustomerRules.ValidateAddress(inline.City, inline.Street, inline.House) is { } e) return (null, null, "INVALID_ADDRESS");
@@ -884,7 +891,13 @@ public class Store : IDisposable
     public object Snapshot(Session? me = null)
     {
         using var c = Open();
-        var deliveries = Deliveries(c);
+        // клиент и курьер получают из БД только свои доставки, а не все заказы системы с последующей фильтрацией
+        var deliveries = me?.Role switch
+        {
+            "client" => Deliveries(c, customerId: me.RefId ?? Guid.Empty),
+            "courier" => Deliveries(c, courierId: me.RefId ?? Guid.Empty),
+            _ => Deliveries(c)
+        };
         var customers = Customers(c);
         var couriers = Couriers(c);
         var addresses = Addresses(c);

@@ -23,14 +23,18 @@ public class Store : IDisposable
     private readonly NpgsqlDataSource _ds;
     private readonly ILogger<Store> _log;
 
-    public Store(IConfiguration cfg, ILogger<Store> log)
+    /// <param name="env">Окружение хоста. Если Seed:Demo не задан, демо-данные создаются только в Development
+    /// (без окружения — например, в модульных тестах — как раньше, с демо-данными).</param>
+    public Store(IConfiguration cfg, ILogger<Store> log, IHostEnvironment? env = null)
     {
         _log = log;
-        var cs = cfg.GetConnectionString("Default")
-                 ?? "Host=localhost;Port=5432;Database=delivery;Username=delivery;Password=delivery";
+        // без запасной строки со стандартным паролем: адрес и учётные данные БД задаются конфигурацией
+        var cs = cfg.GetConnectionString("Default");
+        if (string.IsNullOrWhiteSpace(cs))
+            throw new InvalidOperationException("Не задана строка подключения ConnectionStrings:Default (переменная окружения ConnectionStrings__Default)");
         _ds = NpgsqlDataSource.Create(cs);
         Migrator.Apply(_ds, Migrations.All, log: log);
-        SeedIfEmpty(cfg.GetValue("Seed:Demo", true), cfg["Seed:OperatorPassword"]);
+        SeedIfEmpty(cfg.GetValue("Seed:Demo", env is null || StartupChecks.DemoByDefault(env)), cfg["Seed:OperatorPassword"]);
     }
 
     public void Dispose() => _ds.Dispose();
@@ -63,8 +67,8 @@ public class Store : IDisposable
         else
         {
             // боевой режим: без демо-данных и без предсказуемых паролей — оператор создаётся с заданным паролем
-            if (operatorPassword is null || operatorPassword.Length < MinPasswordLength)
-                throw new InvalidOperationException($"Seed:Demo=false: задайте Seed:OperatorPassword (не короче {MinPasswordLength} символов) для первого входа оператора");
+            if (operatorPassword is null || StartupChecks.IsWeak(operatorPassword, MinPasswordLength, "operator"))
+                throw new InvalidOperationException($"Seed:Demo=false: задайте Seed:OperatorPassword (не короче {MinPasswordLength} символов, не равный логину) для первого входа оператора");
             AddUser(c, "operator", operatorPassword, "operator", null);
             _log.LogInformation("База данных пуста: создан оператор без демо-данных");
         }

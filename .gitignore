@@ -32,8 +32,11 @@ TestResults/
 packages/
 
 # ASP.NET / local development
-appsettings.Development.json
+# appsettings.Development.json хранится в Git: только учебные значения для локального запуска.
+# Личные переопределения и любые настоящие пароли — в appsettings.Local.json или переменных окружения.
 appsettings.Local.json
+appsettings.*.Local.json
+appsettings.Production.json
 
 # Local databases
 *.db
@@ -57,6 +60,9 @@ Thumbs.db
 .env.*
 !.env.example
 secrets.json
+*.pfx
+*.pem
+*.key
 
 data/
 *.db

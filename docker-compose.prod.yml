@@ -1,0 +1,39 @@
+# Рабочее развёртывание. Секреты не хранятся в файле: задайте их в окружении или в .env рядом с файлом
+# (шаблон — .env.example, сам .env в Git не добавляется):
+#   POSTGRES_PASSWORD=... OPERATOR_PASSWORD=... docker compose -f docker-compose.prod.yml up -d --build
+# PostgreSQL доступен только приложению во внутренней сети compose, порт наружу не публикуется.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-delivery}
+      POSTGRES_USER: ${POSTGRES_USER:-delivery}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD (не короче 12 символов)}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    networks: [backend]
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Default: "Host=db;Port=5432;Database=${POSTGRES_DB:-delivery};Username=${POSTGRES_USER:-delivery};Password=${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD}"
+      Seed__Demo: "false"
+      # нужен только при первом запуске на пустой базе: пароль учётной записи operator (не короче 8 символов)
+      Seed__OperatorPassword: "${OPERATOR_PASSWORD:-}"
+    restart: unless-stopped
+networks:
+  backend:
+volumes:
+  pgdata:

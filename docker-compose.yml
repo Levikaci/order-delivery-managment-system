@@ -1,3 +1,5 @@
+# Локальная разработка и учебный запуск: демо-данные, стандартный пароль БД, порты только на 127.0.0.1.
+# Для сервера используйте docker-compose.prod.yml (см. README, раздел «Рабочее развёртывание»).
 services:
   db:
     image: postgres:16
@@ -6,7 +8,8 @@ services:
       POSTGRES_USER: delivery
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-delivery}
     ports:
-      - "5432:5432"   # для запуска API и тестов вне Docker (dotnet run / dotnet test)
+      # для запуска API и тестов вне Docker (dotnet run / dotnet test); снаружи машины база недоступна
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,11 +24,11 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "${APP_BIND:-127.0.0.1}:8080:8080"
     environment:
+      ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Default: "Host=db;Port=5432;Database=delivery;Username=delivery;Password=${POSTGRES_PASSWORD:-delivery}"
-      Seed__Demo: "${SEED_DEMO:-true}"                 # false — без демо-данных и демо-паролей
-      Seed__OperatorPassword: "${OPERATOR_PASSWORD:-}" # обязателен при SEED_DEMO=false (не короче 8 символов)
+      Seed__Demo: "${SEED_DEMO:-true}"
     restart: unless-stopped
 volumes:
   pgdata:

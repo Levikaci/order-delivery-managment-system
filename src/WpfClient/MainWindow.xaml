@@ -120,18 +120,18 @@
                     <Grid>
                         <DataGrid x:Name="OrdersGrid" SelectionChanged="Grid_SelectionChanged">
                             <DataGrid.Columns>
-                                <DataGridTemplateColumn Header="№" Width="104">
+                                <DataGridTemplateColumn Header="№" Width="96">
                                     <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding Num}" Style="{StaticResource Mono}"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
-                                <DataGridTemplateColumn Header="АДРЕС И КЛИЕНТ" Width="*">
+                                <DataGridTemplateColumn Header="АДРЕС И КЛИЕНТ" Width="*" MinWidth="260">
                                     <DataGridTemplateColumn.CellTemplate><DataTemplate>
                                         <StackPanel Margin="0,6">
-                                            <TextBlock Text="{Binding Address}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding Address}" FontWeight="SemiBold" TextWrapping="Wrap" MaxHeight="36" TextTrimming="CharacterEllipsis" ToolTip="{Binding Address}"/>
                                             <TextBlock Text="{Binding Customer}" Style="{StaticResource MutedText}" FontSize="11.5" Margin="0,2,0,0"/>
                                         </StackPanel>
                                     </DataTemplate></DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
-                                <DataGridTemplateColumn Header="КУРЬЕР" Width="170">
+                                <DataGridTemplateColumn Header="КУРЬЕР" Width="150">
                                     <DataGridTemplateColumn.CellTemplate><DataTemplate>
                                         <StackPanel Orientation="Horizontal">
                                             <Border Width="24" Height="24" Background="{StaticResource Active}" CornerRadius="4" Margin="0,0,9,0" Visibility="{Binding ChipVisibility}">
@@ -141,11 +141,11 @@
                                         </StackPanel>
                                     </DataTemplate></DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
-                                <DataGridTemplateColumn Header="СТАТУС" Width="156" CellTemplate="{StaticResource PillCell}"/>
-                                <DataGridTemplateColumn Header="СУММА" Width="96">
+                                <DataGridTemplateColumn Header="СТАТУС" Width="140" CellTemplate="{StaticResource PillCell}"/>
+                                <DataGridTemplateColumn Header="СУММА" Width="90">
                                     <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding Total}" FontWeight="Medium"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
-                                <DataGridTemplateColumn Header="СОЗДАН" Width="122">
+                                <DataGridTemplateColumn Header="СОЗДАН" Width="116">
                                     <DataGridTemplateColumn.CellTemplate><DataTemplate><TextBlock Text="{Binding Created}" Style="{StaticResource MutedText}" FontSize="12"/></DataTemplate></DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
                             </DataGrid.Columns>

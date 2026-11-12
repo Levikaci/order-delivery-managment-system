@@ -26,6 +26,7 @@ public class DeliveryRow
     public Brush StatusBg { get; init; } = Brushes.Transparent;
     public string Total { get; init; } = "";
     public string Created { get; init; } = "";
+    public DateTime CreatedAt { get; init; }
     public string Cat { get; init; } = "";
     public JsonNode Node { get; init; } = null!;
 }
@@ -198,7 +199,9 @@ public partial class MainWindow : Window
     private JsonArray Arr(string name) => _state[name]?.AsArray() ?? new JsonArray();
     private JsonNode? Find(string coll, string? id) => id is null ? null : Arr(coll).FirstOrDefault(x => x!["id"]!.ToString() == id);
     private string NameOf(string coll, string? id) => Find(coll, id)?["name"]?.ToString() ?? "—";
-    private static string Dt(JsonNode? n) => n is null ? "—" : DateTime.TryParse(n.ToString(), null, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var d) ? d.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : "—";
+    private static DateTime? ParseDt(JsonNode? n) =>
+        n is not null && DateTime.TryParse(n.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var d) ? d : null;
+    private static string Dt(JsonNode? n) => ParseDt(n) is { } d ? d.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : "—";
     private static string Cat(string st) => st == "Created" ? "new" : st is "Assigned" or "Accepted" or "InTransit" ? "active" : "done";
 
     // ---------- доставки
@@ -224,11 +227,12 @@ public partial class MainWindow : Window
                 Status = st, StatusText = Texts.D(st), StatusFg = Fg(st), StatusBg = Bgc(st),
                 Total = Money(d["total"]?.ToString()),
                 Created = Dt(d["createdAt"]),
+                CreatedAt = ParseDt(d["createdAt"]) ?? DateTime.MinValue,
                 Cat = Cat(st),
                 Node = d
             });
         }
-        all = all.OrderByDescending(r => r.Node["createdAt"]!.ToString()).ToList();
+        all = all.OrderByDescending(r => r.CreatedAt).ToList(); // по времени, а не по строке (дробные секунды, часовой пояс)
         int n(string c) => all.Count(r => r.Cat == c);
         StTotal.Text = all.Count.ToString(); StNew.Text = n("new").ToString(); StActive.Text = n("active").ToString();
         StDone.Text = all.Count(r => r.Status == "Delivered").ToString(); StFail.Text = all.Count(r => r.Status is "Failed" or "Cancelled").ToString();

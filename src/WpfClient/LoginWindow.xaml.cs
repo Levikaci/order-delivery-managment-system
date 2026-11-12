@@ -23,7 +23,7 @@ public partial class LoginWindow : Window
             OpenMain();
         }
         catch (ApiException ex) { Error.Text = ex.Message; }
-        catch (UriFormatException) { Error.Text = "Некорректный адрес сервера"; }
+        catch (UriFormatException ex) { Error.Text = ex.Message; }
         finally { Go.IsEnabled = true; }
     }
 
@@ -40,7 +40,7 @@ public partial class LoginWindow : Window
     {
         Error.Text = "";
         try { App.Api.SetServer(Server.Text.Trim()); }
-        catch (UriFormatException) { Error.Text = "Некорректный адрес сервера"; return; }
+        catch (UriFormatException ex) { Error.Text = ex.Message; return; }
         if (new RegisterDialog(this).ShowDialog() == true) OpenMain();
     }
 }

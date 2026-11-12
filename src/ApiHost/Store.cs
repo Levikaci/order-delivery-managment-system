@@ -57,6 +57,17 @@ public class Store : IDisposable
     private static Guid? GuidN(NpgsqlDataReader r, int i) => r.IsDBNull(i) ? null : r.GetGuid(i);
     private static bool IsPg(Exception e, string state) => e is PostgresException p && p.SqlState == state;
 
+    /// <summary>
+    /// Временный сбой хранилища: ошибка PostgreSQL/Npgsql, таймаут или сетевая ошибка. Когда база остановлена,
+    /// Npgsql может выбросить SocketException (адрес хоста не разрешается) без обёртки в NpgsqlException.
+    /// </summary>
+    public static bool IsTransient(Exception? e)
+    {
+        for (; e is not null; e = e.InnerException)
+            if (e is DbException or TimeoutException or System.Net.Sockets.SocketException or IOException) return true;
+        return false;
+    }
+
     private void SeedIfEmpty(bool demo, string? operatorPassword)
     {
         using var c = Open();
@@ -709,7 +720,7 @@ public class Store : IDisposable
     private bool TryAutoAssign(Guid deliveryId, Session? actor)
     {
         try { return Assign(deliveryId, null, actor) is null; }
-        catch (Exception ex) when (ex is DbException or TimeoutException)
+        catch (Exception ex) when (IsTransient(ex))
         {
             // заказ уже сохранён, доставка осталась Created: её подхватит фоновое назначение или оператор
             _log.LogError(ex, "Не удалось автоматически назначить курьера для доставки {DeliveryId}, повтор — в фоне", deliveryId);

@@ -79,7 +79,7 @@ app.UseExceptionHandler(h => h.Run(async ctx =>
     var code = ex switch
     {
         BadHttpRequestException or System.Text.Json.JsonException => "INVALID_REQUEST",
-        System.Data.Common.DbException or TimeoutException => "STORAGE_ERROR",
+        _ when Store.IsTransient(ex) => "STORAGE_ERROR", // в том числе сетевые ошибки при недоступной БД
         _ => "INTERNAL_ERROR"
     };
     if (code != "INVALID_REQUEST") ctx.RequestServices.GetRequiredService<ILogger<Program>>().LogError(ex, "Необработанная ошибка запроса {Path}", ctx.Request.Path);

@@ -243,6 +243,31 @@ public class AssignmentRetryServiceTests
         Assert.Equal(TimeSpan.FromSeconds(seconds), AssignmentRetryService.NextDelay(failures, Fast));
 
     [Fact]
+    public void TransientErrors_IncludeNetworkFailures()
+    {
+        Assert.True(Store.IsTransient(new NpgsqlException("connection refused")));
+        Assert.True(Store.IsTransient(new System.Net.Sockets.SocketException(11001)));             // имя хоста БД не разрешается
+        Assert.True(Store.IsTransient(new InvalidOperationException("x", new TimeoutException())));
+        Assert.False(Store.IsTransient(new InvalidOperationException("bug")));
+        Assert.False(Store.IsTransient(null));
+    }
+
+    [Fact]
+    public async Task NetworkFailure_IsRetriedLikeDbError()
+    {
+        var calls = 0;
+        var svc = new AssignmentRetryService(_ =>
+        {
+            if (Interlocked.Increment(ref calls) == 1) throw new System.Net.Sockets.SocketException(11001);
+            return new(0, false);
+        }, new AssignmentOptions { RetryIntervalSeconds = 1, MaxBackoffSeconds = 1 }, NullLogger.Instance);
+        await svc.StartAsync(CancellationToken.None);
+        await WaitUntil(() => Volatile.Read(ref calls) >= 2, TimeSpan.FromSeconds(10));
+        await svc.StopAsync(CancellationToken.None);
+        Assert.True(svc.ExecuteTask!.IsCompletedSuccessfully);
+    }
+
+    [Fact]
     public void Options_AreReadFromConfiguration_AndClamped()
     {
         var cfg = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>

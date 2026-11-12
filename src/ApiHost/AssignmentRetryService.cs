@@ -1,5 +1,3 @@
-using System.Data.Common;
-
 namespace ApiHost;
 
 /// <summary>Настройки фонового назначения курьеров (секция Assignment).</summary>
@@ -89,7 +87,7 @@ public sealed class AssignmentRetryService : BackgroundService
             {
                 failures++;
                 delay = NextDelay(failures, _o);
-                if (ex is DbException or TimeoutException)
+                if (Store.IsTransient(ex))
                     _log.LogWarning(ex, "Фоновое назначение курьеров: временная ошибка БД (попытка {Failures}), следующая через {DelaySeconds} с",
                         failures, (int)delay.TotalSeconds);
                 else

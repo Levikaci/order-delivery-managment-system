@@ -76,7 +76,7 @@ public partial class MainWindow : Window
         else AddNav("deliveries", role == "client" ? "Мои заказы" : "Маршрутный лист");
         _nav["deliveries"].IsChecked = true;
         BuildTabs();
-        _timer.Tick += async (_, _) => { try { await Reload(); } catch { SetConn(false); } };
+        _timer.Tick += async (_, _) => await AutoReload();
         Loaded += async (_, _) => { await Safe(Reload); _timer.Start(); };
         Closed += (_, _) => _timer.Stop();
     }
@@ -138,7 +138,36 @@ public partial class MainWindow : Window
     private async Task Safe(Func<Task> f)
     {
         try { await f(); }
+        catch (ApiException ex) when (ex.Code == "UNAUTHORIZED") { await SessionEnded(); }
         catch (ApiException ex) { MsgDialog.Info(this, "Не удалось выполнить действие", ex.Message); if (ex.Code == "NO_CONNECTION") SetConn(false); }
+    }
+
+    private bool _reloading;
+    private bool _sessionEnded;
+
+    /// <summary>Автообновление по таймеру: без наложения запросов, если предыдущий ещё не завершился.</summary>
+    private async Task AutoReload()
+    {
+        if (_reloading || _sessionEnded) return;
+        _reloading = true;
+        try { await Reload(); }
+        catch (ApiException ex) when (ex.Code == "UNAUTHORIZED") { await SessionEnded(); }
+        catch { SetConn(false); }
+        finally { _reloading = false; }
+    }
+
+    /// <summary>
+    /// Сервер больше не принимает токен (истёк срок, сменён пароль на другом устройстве, учётная запись удалена):
+    /// вместо бесконечного «Нет связи с сервером» — сообщение и возврат к окну входа.
+    /// </summary>
+    private async Task SessionEnded()
+    {
+        if (_sessionEnded) return;
+        _sessionEnded = true;
+        _timer.Stop();
+        MsgDialog.Info(this, "Сеанс завершён", "Войдите в систему снова.");
+        await Api.LogoutAsync();
+        var l = new LoginWindow(); Application.Current.MainWindow = l; l.Show(); Close();
     }
 
     private async Task Reload()

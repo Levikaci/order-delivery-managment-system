@@ -270,6 +270,28 @@ public class Store : IDisposable
             (id, login, pwd) => new { id, name = p.Name.Trim(), phone = p.Phone ?? "", login, password = pwd });
     }
 
+    /// <summary>Логин: 3–32 символа — латинские буквы, цифры, точка, дефис, подчёркивание.</summary>
+    public static string? ValidateLogin(string? login) =>
+        login is not null && System.Text.RegularExpressions.Regex.IsMatch(login.Trim(), "^[A-Za-z0-9._-]{3,32}$") ? null : "INVALID_LOGIN";
+
+    /// <summary>
+    /// Самостоятельная регистрация клиента (POST /api/auth/register): клиент и учётная запись создаются в одной
+    /// транзакции, логин и пароль обязательны (пароль проверяется так же, как при смене пароля).
+    /// Возвращает сессию нового клиента — после регистрации вход выполняется сразу.
+    /// </summary>
+    public (Session? me, string? error) RegisterClient(RegisterRequest? r)
+    {
+        if (r is null) return (null, "INVALID_REQUEST");
+        if (CustomerRules.ValidateName(r.Name) is { } e) return (null, e);
+        if (ValidateLogin(r.Login) is { } le) return (null, le);
+        if (string.IsNullOrEmpty(r.Password)) return (null, "WEAK_PASSWORD");
+        var phone = string.IsNullOrWhiteSpace(r.Phone) ? null : r.Phone.Trim();
+        var (created, err) = NewCustomer(new NewPerson(r.Name, phone, r.Login.Trim(), r.Password));
+        if (created is null) return (null, err);
+        _log.LogInformation("Зарегистрирован клиент с логином {Login}", r.Login.Trim());
+        return (Authenticate(r.Login, r.Password), null);
+    }
+
     public string? UpdateCustomer(Guid id, NewPerson p)
     {
         if (CustomerRules.ValidateName(p.Name) is { } e) return e;

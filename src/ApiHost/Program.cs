@@ -9,6 +9,7 @@ builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Ad
 builder.Services.AddSingleton<Store>();
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<LoginThrottle>();
+builder.Services.AddSingleton<RegistrationThrottle>();
 // повторное автоназначение курьеров доставкам, оставшимся в статусе Created (сбой БД, нет свободных курьеров)
 builder.Services.AddHostedService<AssignmentRetryService>();
 
@@ -50,6 +51,9 @@ var messages = new Dictionary<string, string>
     ["ORDER_NOT_EDITABLE"] = "Заказ нельзя изменить после принятия курьером",
     ["WEAK_PASSWORD"] = "Пароль должен быть не короче 8 символов, не совпадать с логином, старым паролем и стандартными значениями",
     ["TOO_MANY_ATTEMPTS"] = "Слишком много неудачных попыток входа. Повторите позже",
+    ["TOO_MANY_REGISTRATIONS"] = "Слишком много попыток регистрации. Повторите позже",
+    ["REGISTRATION_DISABLED"] = "Самостоятельная регистрация отключена. Обратитесь к оператору",
+    ["INVALID_LOGIN"] = "Логин: от 3 до 32 символов — латинские буквы, цифры, точка, дефис или подчёркивание",
     ["DELIVERY_NOT_FAILED"] = "Повторить можно только неудачную доставку",
     ["IDEMPOTENCY_CONFLICT"] = "Этот requestId уже использован для заказа с другими данными. Для нового заказа нужен новый requestId",
     ["STORAGE_ERROR"] = "Временная ошибка хранилища данных. Повторите запрос позже",
@@ -61,8 +65,8 @@ IResult Err(string code, int? statusOverride = null)
     var status = statusOverride ?? code switch
     {
         "UNAUTHORIZED" or "INVALID_CREDENTIALS" => 401,
-        "TOO_MANY_ATTEMPTS" => 429,
-        "FORBIDDEN" or "UNAUTHORIZED_STATUS_CHANGE" => 403,
+        "TOO_MANY_ATTEMPTS" or "TOO_MANY_REGISTRATIONS" => 429,
+        "FORBIDDEN" or "UNAUTHORIZED_STATUS_CHANGE" or "REGISTRATION_DISABLED" => 403,
         "STORAGE_ERROR" or "INTERNAL_ERROR" => 500,
         _ when code.EndsWith("NOT_FOUND") => 404,
         _ when code.EndsWith("HAS_ORDERS") || code.StartsWith("DELIVERY_ALREADY") || code is "COURIER_NOT_AVAILABLE" or "COURIER_BUSY"
@@ -120,6 +124,15 @@ api.MapPost("/auth/login", (HttpContext h, Store s, AuthService a, LoginThrottle
     }
     t.Succeeded(r?.Login);
     return Results.Ok(new { token = a.Start(me), role = me.Role, refId = me.RefId, name = me.Name });
+});
+// Регистрация клиента без участия оператора; курьеров и операторов по-прежнему создаёт только оператор.
+api.MapPost("/auth/register", (HttpContext h, Store s, AuthService a, RegistrationThrottle t, IConfiguration cfg, RegisterRequest r) =>
+{
+    if (!cfg.GetValue("Security:AllowRegistration", true)) return Err("REGISTRATION_DISABLED");
+    if (!t.TryAcquire(h.Connection.RemoteIpAddress?.ToString())) return Err("TOO_MANY_REGISTRATIONS");
+    var (me, e) = s.RegisterClient(r);
+    if (me is null) return Err(e ?? "INVALID_REQUEST");
+    return Results.Ok(new { token = a.Start(me), role = me.Role, refId = me.RefId, name = me.Name, login = r.Login.Trim() });
 });
 Roles(api.MapPost("/auth/logout", (HttpContext h, AuthService a) => { a.End(AuthService.Token(h.Request)!); return Results.Ok(); }));
 Roles(api.MapPost("/auth/password", (HttpContext h, Store s, ChangePasswordRequest r) =>

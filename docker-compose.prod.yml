@@ -35,6 +35,9 @@ services:
       # фоновое повторное назначение курьеров доставкам в статусе Created
       Assignment__RetryIntervalSeconds: "${ASSIGNMENT_RETRY_INTERVAL:-15}"
       Assignment__MaxBackoffSeconds: "${ASSIGNMENT_MAX_BACKOFF:-300}"
+      # самостоятельная регистрация клиентов (POST /api/auth/register) и её лимит с одного адреса в час
+      Security__AllowRegistration: "${ALLOW_REGISTRATION:-true}"
+      Security__MaxRegistrationsPerHour: "${MAX_REGISTRATIONS_PER_HOUR:-20}"
     restart: unless-stopped
 networks:
   backend:

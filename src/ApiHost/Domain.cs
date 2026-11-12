@@ -67,6 +67,8 @@ public record CourierStateRequest(CourierState State);
 public record ProductRequest(string Name, decimal Price);
 public record AddressRequest(string? Label, string City, string Street, string House, string? Apartment);
 public record LoginRequest(string Login, string Password);
+/// <summary>Самостоятельная регистрация клиента: имя, необязательный телефон, логин и пароль.</summary>
+public record RegisterRequest(string Name, string? Phone, string Login, string Password);
 public record ChangePasswordRequest(string OldPassword, string NewPassword);
 
 public record StatusChange(DeliveryStatus Status, DateTime At, string? Comment, Guid? ActorId = null);

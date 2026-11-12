@@ -69,3 +69,32 @@ public class LoginThrottle
 
     public void Succeeded(string? login) => _failures.TryRemove(Key(login), out _);
 }
+
+/// <summary>
+/// Ограничение самостоятельной регистрации: не больше MaxRegistrationsPerHour попыток в час с одного адреса
+/// (защита от массового создания учётных записей и перебора занятых логинов). Счётчик хранится в памяти экземпляра API.
+/// </summary>
+public class RegistrationThrottle
+{
+    private static readonly TimeSpan Window = TimeSpan.FromHours(1);
+    private readonly int _max;
+    private readonly TimeProvider _time;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (int Count, DateTimeOffset Since)> _attempts = new();
+
+    public RegistrationThrottle(IConfiguration cfg, TimeProvider? time = null)
+    {
+        _max = Math.Max(1, cfg.GetValue("Security:MaxRegistrationsPerHour", 20));
+        _time = time ?? TimeProvider.System;
+    }
+
+    /// <summary>Учитывает попытку и возвращает false, если лимит для адреса уже исчерпан.</summary>
+    public bool TryAcquire(string? address)
+    {
+        var now = _time.GetUtcNow();
+        var v = _attempts.AddOrUpdate(address ?? "", _ => (1, now), (_, f) => now - f.Since >= Window ? (1, now) : (f.Count + 1, f.Since));
+        if (_attempts.Count > 10_000)
+            foreach (var (k, x) in _attempts)
+                if (now - x.Since >= Window) _attempts.TryRemove(k, out _);
+        return v.Count <= _max;
+    }
+}

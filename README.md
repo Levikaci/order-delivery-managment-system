@@ -37,9 +37,8 @@
 ## Как устроено
 - `src/ApiHost` — ASP.NET Core 9 minimal API, хранилище на PostgreSQL (`Store.cs`), миграции схемы (`Db/`), авторизация (`Auth.cs`), проверка конфигурации при запуске (`StartupChecks.cs`), фоновое назначение курьеров (`AssignmentRetryService.cs`).
 - `src/Contracts` — DTO и перечисления; `OrderModule`, `DeliveryModule`, `CourierModule`, `CustomerModule` — бизнес-правила каждого модуля (`*Rules.cs`), общение через контракты.
-- `tools/SqliteImport` — разовый перенос данных из старой версии (SQLite) в PostgreSQL.
 - `src/WpfClient` — клиентское приложение WPF (вход, регистрация клиента, рабочие места по ролям).
-- `tests/` — 262 теста (правила модулей, сценарии, миграции, идемпотентность, фоновое назначение, регистрация, конфигурация, HTTP-API и роли на реальном PostgreSQL).
+- `tests/` — 258 тестов (правила модулей, сценарии, миграции, идемпотентность, фоновое назначение, регистрация, конфигурация, HTTP-API и роли на реальном PostgreSQL).
 - `docs/` — этапы курсового, ADR, архитектура, тесты.
 
 ![Архитектура](docs/img/architecture.png)
@@ -51,17 +50,16 @@ PostgreSQL 16. Строка подключения — `ConnectionStrings:Defaul
 
 Текстовое описание схемы — в [docs/architecture.md](docs/architecture.md#схема-бд-миграции-00010006) (диаграмма показывает таблицы миграций 0001–0004; 0005 добавляет `orders.request_hash`, 0006 — индексы очереди назначения и активных доставок курьера). Основные таблицы: `customers`, `customer_addresses`, `couriers`, `users` (пароли PBKDF2), `products` (`price_kopecks`), `orders`, `order_items`, `deliveries`, `status_history`, `order_history`, `order_changes`, `sessions`, `schema_migrations`.
 
-### Обновление со старой версии (SQLite)
-См. [docs/architecture.md](docs/architecture.md#обновление-существующей-установки): запустить PostgreSQL, затем
+### Обновление версии
+Новая версия приложения при старте сама применяет недостающие миграции; уже применённые не повторяются, данные сохраняются. Перед обновлением рабочей базы сделайте резервную копию:
 ```bash
-dotnet run --project tools/SqliteImport -- data/delivery.db "Host=localhost;Port=5432;Database=delivery;Username=delivery;Password=delivery"
+docker compose exec db pg_dump -U delivery -d delivery > backup.sql
 ```
-Перенос в пустую базу, одной транзакцией; файл SQLite не меняется.
+Подробнее — [docs/architecture.md](docs/architecture.md#обновление-установки).
 
 ## Зависимости
 - **.NET 9 SDK / ASP.NET Core 9** — сервер и API (minimal API).
 - **PostgreSQL 16 + Npgsql** — хранение данных.
-- **Microsoft.Data.Sqlite** — только в утилите переноса `tools/SqliteImport`.
 - **xUnit** (+ Test.Sdk, coverlet) — тесты.
 - **WPF (.NET 9, Windows)** — клиентское приложение; сторонних пакетов не использует.
 - **Docker** — по желанию, для запуска без .NET.

@@ -48,7 +48,7 @@ Created -> Assigned -> Accepted -> InTransit -> Delivered
 
 ## Фактическое состояние
 
-262 автоматических теста (41 модульный + 221 интеграционный; `dotnet test OrderDeliveryManagementSystem.sln`, все проходят). Интеграционные тесты работают на **реальном PostgreSQL**: каждый тест создаёт и удаляет собственную базу.
+258 автоматических тестов (41 модульный + 217 интеграционных; `dotnet test OrderDeliveryManagementSystem.sln`, все проходят). Интеграционные тесты работают на **реальном PostgreSQL**: каждый тест создаёт и удаляет собственную базу.
 
 Подключение к серверу — переменная `TEST_PG_ADMIN` (строка подключения с правом `CREATE DATABASE`); по умолчанию `Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=postgres`. Быстрый старт: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`. В CI — service-контейнер (`.github/workflows/ci.yml`).
 
@@ -58,7 +58,6 @@ Created -> Assigned -> Accepted -> InTransit -> Delivered
 | `OrderModule.Tests/MoneyTests` | точность копеек, округление, 0.1+0.1+0.1, переполнение, границы цены |
 | `Integration.Tests/ScenarioTests` | сценарии ТЗ на `Store`: создание, автоназначение, нет курьера, повторное назначение, полный цикл, отмена, неудача, права ролей, адреса, редактирование, справочники |
 | `Integration.Tests/MigrationTests` | миграции: чистая БД, повторный запуск, обновление с данными, откат неудачной миграции, чужая и более новая схема, параллельный старт, перезапуск |
-| `Integration.Tests/SqliteImportTests` | перенос SQLite v2 → PostgreSQL: данные, копейки, `DeliveryFailed`, вход после импорта, отказы |
 | `Integration.Tests/ReliabilityTests` | отказы БД (откат, повтор), идемпотентность `requestId`, параллельные назначения и дубли, сохранение комментария |
 | `Integration.Tests/ChangeLogTests` | журнал изменений: значения, автор, время, no-op, очистка, перезапуск, `actor_id` |
 | `Integration.Tests/IdempotencyTests` | повтор `requestId`: идентичный и эквивалентный запрос, изменённые товары, количество, адрес, квартира, комментарий, сохранённый адрес и флаг сохранения → `IDEMPOTENCY_CONFLICT`; разные клиенты; заказы до миграции 0005; параллельные одинаковые и различающиеся запросы; HTTP 409 |

@@ -1,6 +1,6 @@
 # Соответствие ТЗ
 
-Актуально для v2.0.0. Тесты — классы в `tests/` (см. [testing.md](testing.md)). Первоначальные документы этапов не менялись.
+Актуально для v2.1.1. Тесты — классы в `tests/` (см. [testing.md](testing.md)). Первоначальные документы этапов не менялись.
 
 | Требование ТЗ | Реализация | Подтверждающие тесты |
 |---|---|---|
@@ -24,16 +24,16 @@
 | Роли и права | вход по логину/паролю, Bearer, проверка роли на каждом endpoint; оператор заказы не создаёт | `ApiRoleTests` (матрица 401/403, изоляция клиентов) |
 | Деньги | `bigint` в копейках, `OrderModule.Money` ([ADR-005](decisions/ADR-005-money-in-kopecks.md)) | `MoneyTests`, `Money_RoundTripsExactly_OverHttp` |
 | Хранение данных | PostgreSQL, версионированные миграции ([ADR-004](decisions/ADR-004-postgresql-and-migrations.md)) | `MigrationTests`, `Store_Restart_KeepsData*`, `DataSurvivesApplicationRestart` |
-| Обновление существующей установки | `tools/SqliteImport` | `SqliteImportTests` |
+| Обновление установки | недостающие миграции применяются при старте, данные не удаляются ([architecture.md](architecture.md#обновление-установки)) | `Upgrade_FromV1_KeepsAllExistingRecords`, `FailingMigration_IsRolledBack_AndKeepsPreviousVersionAndData` |
 | Идемпотентность и устойчивость к сбоям | `requestId` с отпечатком запроса (`409 IDEMPOTENCY_CONFLICT`), транзакции, `FOR UPDATE` | `ReliabilityTests`, `IdempotencyTests`, `PostOrders_WithSameRequestId_IsIdempotent` |
 | Назначение после сбоя (сценарий 2) | фоновое назначение `AssignmentRetryService`, `FOR UPDATE SKIP LOCKED` ([ADR-008](decisions/ADR-008-deployment-idempotency-assignment-recovery.md)) | `AssignmentRecoveryTests`, `AssignmentRetryServiceTests`, `AssignmentRetryApiTests` |
 | Безопасность развёртывания | окружения Development/Production, `StartupChecks`, `docker-compose.prod.yml` | `StartupConfigTests`, `AccountSecurityTests` |
 | Запуск | `docker compose up --build` (локально), `docker compose -f docker-compose.prod.yml up -d` (сервер) или `dotnet run` | CI (`.github/workflows/ci.yml`) |
-| Тесты | 248 автоматических тестов | `dotnet test OrderDeliveryManagementSystem.sln` |
+| Тесты | 258 автоматических тестов | `dotnet test OrderDeliveryManagementSystem.sln` |
 
 ## Допустимые отклонения от ТЗ
 
 - СУБД: ТЗ её не фиксирует; выбран PostgreSQL ([ADR-004](decisions/ADR-004-postgresql-and-migrations.md)).
 - `IDeliveryService` и in-memory сервисы из первоначальных протоколов удалены как неиспользуемые ([ADR-007](decisions/ADR-007-reliability-and-change-log.md)).
 - Журнал изменений заказа и `requestId` — расширения ТЗ с обоснованием в ADR-007; оба необязательны для клиентов API.
-- Повторная доставка после `Failed` в рамках заказа не предусмотрена (ADR-006).
+- Повторная доставка после `Failed` в ТЗ не описана; с версии 2.1.0 оператор может повторить неудачную доставку (`POST /api/deliveries/{id}/retry`): она возвращается в `Created`, история сохраняется (ADR-006).

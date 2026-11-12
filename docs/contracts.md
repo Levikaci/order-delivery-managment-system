@@ -21,12 +21,13 @@
 | POST | `/api/auth/login` | Вход, возвращает Bearer-токен |
 | POST | `/api/deliveries/{id}/confirm` | Подтверждение получения клиентом |
 | POST | `/api/deliveries/{id}/retry` | Повтор неудачной доставки (только оператор): `Failed` → `Created`, курьер подбирается заново |
+| POST | `/api/auth/register` | Регистрация клиента (`name`, `phone`, `login`, `password`), возвращает Bearer-токен как вход |
 | POST | `/api/auth/password` | Смена пароля (`oldPassword`, `newPassword` ≥ 8 символов) |
 | PUT | `/api/orders/{id}` | Редактирование заказа (Created/Assigned) |
 | PATCH | `/api/couriers/{id}/state` | Состояние курьера |
 | GET/POST/PUT/DELETE | `/api/products`, `/api/customers/{id}/addresses` | Товары и адреса |
 
-Все запросы, кроме `/api/health` и `/api/auth/login`, требуют заголовок `Authorization: Bearer <token>`.
+Все запросы, кроме `/api/health`, `/api/auth/login` и `/api/auth/register`, требуют заголовок `Authorization: Bearer <token>`.
 
 Формат ошибки:
 
@@ -171,7 +172,7 @@ DeliveryDto
 | `GET /api/orders/{id}/changes` | Журнал изменений заказа (оператор и владелец-клиент) |
 | Заказ / доставка | В ответ добавлены `orderStatus`, `changes[]` (`at`, `actorId`, `actorName`, `field` = `Items`/`Address`/`Comment`, `oldValue`, `newValue`); записи истории содержат `actorId` |
 | `OrderStatus` | Новое значение `DeliveryFailed` (ADR-006) |
-| Ошибки | `STORAGE_ERROR` (503 с заголовком `Retry-After`, если БД временно недоступна: нет соединения, таймаут, перезапуск сервера; 500 — прочие ошибки хранилища), `INTERNAL_ERROR` (500), `INVALID_REQUEST` (400, некорректный JSON), `IDEMPOTENCY_CONFLICT` (409), `TOO_MANY_ATTEMPTS` (429, вход временно заблокирован), `WEAK_PASSWORD` (400, также при создании клиента/курьера со слабым паролем) в том же формате `{success, errorCode, error, message}` |
+| Ошибки | `STORAGE_ERROR` (503 с заголовком `Retry-After`, если БД временно недоступна: нет соединения, таймаут, перезапуск сервера; 500 — прочие ошибки хранилища), `INTERNAL_ERROR` (500), `INVALID_REQUEST` (400, некорректный JSON), `IDEMPOTENCY_CONFLICT` (409), `TOO_MANY_ATTEMPTS` (429, вход временно заблокирован), `TOO_MANY_REGISTRATIONS` (429), `REGISTRATION_DISABLED` (403), `INVALID_LOGIN` (400), `LOGIN_TAKEN` (409), `WEAK_PASSWORD` (400, также при создании клиента/курьера со слабым паролем) в том же формате `{success, errorCode, error, message}` |
 | Назначение курьера | Доставки `Created` без курьера назначаются фоновой службой (`AssignmentRetryService`); ручное `POST /api/deliveries/{id}/assign` работает как прежде. Повторное назначение уже назначенной доставки — `409 DELIVERY_ALREADY_ASSIGNED`; курьер с активной доставкой — `409 COURIER_BUSY` |
 | Внутренний интерфейс | `IDeliveryService` / `CreateDeliveryRequest` из «Протокола 1» **удалены**: создание доставки — `Store.CreateDelivery` и `POST /api/deliveries`; повтор по `orderId` идемпотентен (`DELIVERY_ALREADY_EXISTS`, 409) |
 

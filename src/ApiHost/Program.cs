@@ -8,6 +8,7 @@ if (string.IsNullOrEmpty(builder.Configuration["urls"]) && string.IsNullOrEmpty(
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddSingleton<Store>();
 builder.Services.AddSingleton<AuthService>();
+builder.Services.AddSingleton<LoginThrottle>();
 
 var app = builder.Build();
 // Вне Development сервер не стартует со стандартными паролями, демо-пользователями и без строки подключения.
@@ -45,7 +46,8 @@ var messages = new Dictionary<string, string>
     ["UNAUTHORIZED_STATUS_CHANGE"] = "Вы не можете изменить этот статус (отмена возможна только до передачи в доставку)",
     ["FAILURE_REASON_REQUIRED"] = "Укажите причину, по которой доставка не выполнена",
     ["ORDER_NOT_EDITABLE"] = "Заказ нельзя изменить после принятия курьером",
-    ["WEAK_PASSWORD"] = "Новый пароль должен быть не короче 8 символов и отличаться от старого",
+    ["WEAK_PASSWORD"] = "Пароль должен быть не короче 8 символов, не совпадать с логином, старым паролем и стандартными значениями",
+    ["TOO_MANY_ATTEMPTS"] = "Слишком много неудачных попыток входа. Повторите позже",
     ["DELIVERY_NOT_FAILED"] = "Повторить можно только неудачную доставку",
     ["STORAGE_ERROR"] = "Временная ошибка хранилища данных. Повторите запрос позже",
     ["INTERNAL_ERROR"] = "Внутренняя ошибка сервера",
@@ -56,6 +58,7 @@ IResult Err(string code)
     var status = code switch
     {
         "UNAUTHORIZED" or "INVALID_CREDENTIALS" => 401,
+        "TOO_MANY_ATTEMPTS" => 429,
         "FORBIDDEN" or "UNAUTHORIZED_STATUS_CHANGE" => 403,
         "STORAGE_ERROR" or "INTERNAL_ERROR" => 500,
         _ when code.EndsWith("NOT_FOUND") => 404,
@@ -96,10 +99,17 @@ var api = app.MapGroup("/api");
 api.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 // --- вход ---
-api.MapPost("/auth/login", (HttpContext h, Store s, AuthService a, LoginRequest r) =>
-    s.Authenticate(r?.Login, r?.Password) is { } me
-        ? Results.Ok(new { token = a.Start(me), role = me.Role, refId = me.RefId, name = me.Name })
-        : Err("INVALID_CREDENTIALS"));
+api.MapPost("/auth/login", (HttpContext h, Store s, AuthService a, LoginThrottle t, LoginRequest r) =>
+{
+    if (t.IsLocked(r?.Login)) return Err("TOO_MANY_ATTEMPTS");
+    if (s.Authenticate(r?.Login, r?.Password) is not { } me)
+    {
+        t.Failed(r?.Login);
+        return Err("INVALID_CREDENTIALS");
+    }
+    t.Succeeded(r?.Login);
+    return Results.Ok(new { token = a.Start(me), role = me.Role, refId = me.RefId, name = me.Name });
+});
 Roles(api.MapPost("/auth/logout", (HttpContext h, AuthService a) => { a.End(AuthService.Token(h.Request)!); return Results.Ok(); }));
 Roles(api.MapPost("/auth/password", (HttpContext h, Store s, ChangePasswordRequest r) =>
     s.ChangePassword(Me(h), r?.OldPassword, r?.NewPassword, AuthService.Token(h.Request) is { } t ? AuthService.HashToken(t) : null) is { } e ? Err(e) : Results.Ok()));

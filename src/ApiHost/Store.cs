@@ -105,6 +105,9 @@ public class Store : IDisposable
             ("i", Guid.NewGuid()), ("l", login), ("s", salt), ("h", Hash(password, salt)), ("r", role), ("f", refId)).ExecuteNonQuery();
     }
 
+    // соль для «пустой» проверки пароля: ответ на несуществующий логин занимает столько же времени, сколько на существующий
+    private static readonly byte[] DummySalt = RandomNumberGenerator.GetBytes(16);
+
     public Session? Authenticate(string? login, string? password)
     {
         if (string.IsNullOrWhiteSpace(login) || password is null) return null;
@@ -112,7 +115,11 @@ public class Store : IDisposable
         byte[] salt, hash; string role; Guid? refId; Guid userId;
         using (var r = Cmd(c, "SELECT salt,hash,role,ref_id,id FROM users WHERE lower(login)=lower(@l)", ("l", login.Trim())).ExecuteReader())
         {
-            if (!r.Read()) return null;
+            if (!r.Read())
+            {
+                Hash(password, DummySalt); // не раскрываем по времени ответа, существует ли логин
+                return null;
+            }
             salt = (byte[])r["salt"]; hash = (byte[])r["hash"]; role = r.GetString(2); refId = GuidN(r, 3); userId = r.GetGuid(4);
         }
         if (!CryptographicOperations.FixedTimeEquals(hash, Hash(password, salt))) return null;
@@ -137,7 +144,9 @@ public class Store : IDisposable
     public Session? LoadSession(byte[] tokenHash)
     {
         using var c = Open();
-        using var r = Cmd(c, "SELECT role,ref_id,name,user_id FROM sessions WHERE token_hash=@h AND expires_at > now()", ("h", tokenHash)).ExecuteReader();
+        // роль и связь берутся из users: сессия удалённой учётной записи недействительна, смена роли применяется сразу
+        using var r = Cmd(c, @"SELECT u.role,u.ref_id,s.name,s.user_id FROM sessions s JOIN users u ON u.id=s.user_id
+                               WHERE s.token_hash=@h AND s.expires_at > now()", ("h", tokenHash)).ExecuteReader();
         return r.Read() ? new Session(r.GetString(0), GuidN(r, 1), r.GetString(2), GuidN(r, 3)) : null;
     }
 
@@ -154,13 +163,14 @@ public class Store : IDisposable
         if (newPassword is null || newPassword.Length < MinPasswordLength || newPassword == oldPassword) return "WEAK_PASSWORD";
         using var c = Open();
         using var tx = c.BeginTransaction();
-        byte[] salt, hash;
-        using (var r = Cmd(c, "SELECT salt,hash FROM users WHERE id=@i FOR UPDATE", ("i", uid)).ExecuteReader())
+        byte[] salt, hash; string login;
+        using (var r = Cmd(c, "SELECT salt,hash,login FROM users WHERE id=@i FOR UPDATE", ("i", uid)).ExecuteReader())
         {
             if (!r.Read()) return "FORBIDDEN";
-            salt = (byte[])r["salt"]; hash = (byte[])r["hash"];
+            salt = (byte[])r["salt"]; hash = (byte[])r["hash"]; login = r.GetString(2);
         }
         if (oldPassword is null || !CryptographicOperations.FixedTimeEquals(hash, Hash(oldPassword, salt))) return "INVALID_CREDENTIALS";
+        if (StartupChecks.IsWeak(newPassword, MinPasswordLength, login)) return "WEAK_PASSWORD"; // не равен логину и не из списка стандартных
         var ns = RandomNumberGenerator.GetBytes(16);
         Cmd(c, "UPDATE users SET salt=@s,hash=@h WHERE id=@i", ("s", ns), ("h", Hash(newPassword, ns)), ("i", uid)).ExecuteNonQuery();
         Cmd(c, "DELETE FROM sessions WHERE user_id=@u AND (@k::bytea IS NULL OR token_hash<>@k::bytea)", ("u", uid), ("k", keepSession)).ExecuteNonQuery();
@@ -168,11 +178,52 @@ public class Store : IDisposable
         return null;
     }
 
-    private static (string login, string password) NewCredentials(string? login, string? password, string prefix)
+    private const string PasswordAlphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+    /// <summary>Случайный пароль из 12 символов без похожих букв и цифр (l/1, O/0).</summary>
+    private static string GeneratePassword() => RandomNumberGenerator.GetString(PasswordAlphabet, 12);
+
+    /// <summary>
+    /// Учётные данные новой записи. Заданный оператором пароль проверяется так же, как при смене пароля;
+    /// если не задан — генерируется стойкий (раньше — 6 цифр, короче минимальной длины пароля).
+    /// </summary>
+    private static (string login, string password, bool generatedLogin, string? error) NewCredentials(string? login, string? password, string prefix)
     {
-        login = string.IsNullOrWhiteSpace(login) ? $"{prefix}{RandomNumberGenerator.GetInt32(1000, 9999)}" : login.Trim();
-        password = string.IsNullOrWhiteSpace(password) ? RandomNumberGenerator.GetInt32(100000, 999999).ToString() : password;
-        return (login, password);
+        var generated = string.IsNullOrWhiteSpace(login);
+        login = generated ? $"{prefix}{RandomNumberGenerator.GetInt32(1000, 10000)}" : login!.Trim();
+        if (string.IsNullOrWhiteSpace(password)) password = GeneratePassword();
+        else if (StartupChecks.IsWeak(password, MinPasswordLength, login)) return (login, password, generated, "WEAK_PASSWORD");
+        return (login, password, generated, null);
+    }
+
+    /// <summary>Создаёт запись и учётную запись в одной транзакции; сгенерированный логин при совпадении подбирается заново.</summary>
+    private (object? created, string? error) CreateWithUser(NewPerson p, string prefix, string role, Func<NpgsqlConnection, Guid> insert, Func<Guid, string, string, object> result)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var (login, pwd, generated, e) = NewCredentials(p.Login, p.Password, prefix);
+            if (e is not null) return (null, e);
+            using var c = Open();
+            try
+            {
+                using var tx = c.BeginTransaction();
+                var id = insert(c);
+                AddUser(c, login, pwd, role, id);
+                tx.Commit();
+                return (result(id, login, pwd), null);
+            }
+            catch (Exception ex) when (IsPg(ex, PgUniqueViolation))
+            {
+                if (!generated || attempt >= 4) return (null, "LOGIN_TAKEN");
+            }
+        }
+    }
+
+    /// <summary>Удаляет учётные записи вместе с их сессиями: токен удалённого пользователя перестаёт действовать сразу.</summary>
+    private static void DeleteUsers(NpgsqlConnection c, Guid refId, string role)
+    {
+        Cmd(c, "DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE ref_id=@i AND role=@r)", ("i", refId), ("r", role)).ExecuteNonQuery();
+        Cmd(c, "DELETE FROM users WHERE ref_id=@i AND role=@r", ("i", refId), ("r", role)).ExecuteNonQuery();
     }
 
     // ---------- клиенты ----------
@@ -186,17 +237,8 @@ public class Store : IDisposable
     public (object? created, string? error) NewCustomer(NewPerson p)
     {
         if (CustomerRules.ValidateName(p.Name) is { } e) return (null, e);
-        using var c = Open();
-        var (login, pwd) = NewCredentials(p.Login, p.Password, "client");
-        try
-        {
-            using var tx = c.BeginTransaction();
-            var id = AddCustomer(c, p.Name.Trim(), p.Phone);
-            AddUser(c, login, pwd, "client", id);
-            tx.Commit();
-            return (new { id, name = p.Name.Trim(), phone = p.Phone ?? "", login, password = pwd }, null);
-        }
-        catch (Exception ex) when (IsPg(ex, PgUniqueViolation)) { return (null, "LOGIN_TAKEN"); }
+        return CreateWithUser(p, "client", "client", c => AddCustomer(c, p.Name.Trim(), p.Phone),
+            (id, login, pwd) => new { id, name = p.Name.Trim(), phone = p.Phone ?? "", login, password = pwd });
     }
 
     public string? UpdateCustomer(Guid id, NewPerson p)
@@ -213,7 +255,7 @@ public class Store : IDisposable
         {
             using var tx = c.BeginTransaction();
             if (Count(c, "SELECT COUNT(*) FROM orders WHERE customer_id=@i", ("i", id)) > 0) return "CUSTOMER_HAS_ORDERS";
-            Cmd(c, "DELETE FROM users WHERE ref_id=@i AND role='client'", ("i", id)).ExecuteNonQuery();
+            DeleteUsers(c, id, "client");
             var n = Cmd(c, "DELETE FROM customers WHERE id=@i", ("i", id)).ExecuteNonQuery();
             if (n == 0) return "CUSTOMER_NOT_FOUND";
             tx.Commit();
@@ -290,17 +332,8 @@ public class Store : IDisposable
     public (object? created, string? error) NewCourier(NewPerson p)
     {
         if (CustomerRules.ValidateName(p.Name) is { } e) return (null, e);
-        using var c = Open();
-        var (login, pwd) = NewCredentials(p.Login, p.Password, "courier");
-        try
-        {
-            using var tx = c.BeginTransaction();
-            var id = AddCourier(c, p.Name.Trim(), p.Phone);
-            AddUser(c, login, pwd, "courier", id);
-            tx.Commit();
-            return (new { id, name = p.Name.Trim(), phone = p.Phone ?? "", state = CourierState.Available, available = true, login, password = pwd }, null);
-        }
-        catch (Exception ex) when (IsPg(ex, PgUniqueViolation)) { return (null, "LOGIN_TAKEN"); }
+        return CreateWithUser(p, "courier", "courier", c => AddCourier(c, p.Name.Trim(), p.Phone),
+            (id, login, pwd) => new { id, name = p.Name.Trim(), phone = p.Phone ?? "", state = CourierState.Available, available = true, login, password = pwd });
     }
 
     public string? UpdateCourier(Guid id, NewPerson p)
@@ -317,7 +350,7 @@ public class Store : IDisposable
         {
             using var tx = c.BeginTransaction();
             if (Count(c, "SELECT COUNT(*) FROM deliveries WHERE courier_id=@i", ("i", id)) > 0) return "COURIER_HAS_ORDERS";
-            Cmd(c, "DELETE FROM users WHERE ref_id=@i AND role='courier'", ("i", id)).ExecuteNonQuery();
+            DeleteUsers(c, id, "courier");
             var n = Cmd(c, "DELETE FROM couriers WHERE id=@i", ("i", id)).ExecuteNonQuery();
             if (n == 0) return "COURIER_NOT_FOUND";
             tx.Commit();

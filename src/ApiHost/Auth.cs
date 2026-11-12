@@ -30,3 +30,42 @@ public class AuthService
 
     public Session? Get(HttpRequest r) => Token(r) is { Length: > 0 } t ? _store.LoadSession(HashToken(t)) : null;
 }
+
+/// <summary>
+/// Ограничение подбора пароля: после MaxFailures неудачных попыток входа под одним логином в течение Window
+/// вход под этим логином временно отклоняется кодом TOO_MANY_ATTEMPTS (HTTP 429). Счётчик хранится в памяти экземпляра API.
+/// </summary>
+public class LoginThrottle
+{
+    private readonly int _maxFailures;
+    private readonly TimeSpan _window;
+    private readonly TimeProvider _time;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (int Failures, DateTimeOffset Since)> _failures = new(StringComparer.OrdinalIgnoreCase);
+
+    public LoginThrottle(IConfiguration cfg, TimeProvider? time = null)
+    {
+        _maxFailures = Math.Max(1, cfg.GetValue("Security:MaxLoginFailures", 5));
+        _window = TimeSpan.FromSeconds(Math.Max(1, cfg.GetValue("Security:LoginLockoutSeconds", 300)));
+        _time = time ?? TimeProvider.System;
+    }
+
+    private static string Key(string? login) => (login ?? "").Trim();
+
+    public bool IsLocked(string? login)
+    {
+        if (!_failures.TryGetValue(Key(login), out var f)) return false;
+        if (_time.GetUtcNow() - f.Since >= _window) { _failures.TryRemove(Key(login), out _); return false; }
+        return f.Failures >= _maxFailures;
+    }
+
+    public void Failed(string? login)
+    {
+        var now = _time.GetUtcNow();
+        _failures.AddOrUpdate(Key(login), _ => (1, now), (_, f) => now - f.Since >= _window ? (1, now) : (f.Failures + 1, f.Since));
+        if (_failures.Count > 10_000) // защита памяти от перебора несуществующих логинов
+            foreach (var (k, v) in _failures)
+                if (now - v.Since >= _window) _failures.TryRemove(k, out _);
+    }
+
+    public void Succeeded(string? login) => _failures.TryRemove(Key(login), out _);
+}

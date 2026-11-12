@@ -317,11 +317,11 @@ public class ScenarioTests : IDisposable
         var d = Create();
         Assert.Equal("CUSTOMER_HAS_ORDERS", _s.DeleteCustomer(_ivan));
         Assert.Equal("COURIER_HAS_ORDERS", _s.DeleteCourier(d.CourierId!.Value));
-        var (created, e) = _s.NewCustomer(new("Новый Клиент", "+7 000", "newcli", "pw1"));
+        var (created, e) = _s.NewCustomer(new("Новый Клиент", "+7 000", "newcli", "pw1-secret"));
         Assert.Null(e);
         Assert.NotNull(created);
-        Assert.Equal("client", _s.Authenticate("newcli", "pw1")!.Role);
-        Assert.Equal("LOGIN_TAKEN", _s.NewCustomer(new("Другой", null, "newcli", "x")).error);
+        Assert.Equal("client", _s.Authenticate("newcli", "pw1-secret")!.Role);
+        Assert.Equal("LOGIN_TAKEN", _s.NewCustomer(new("Другой", null, "newcli", "x-secret-2")).error);
         Assert.Equal("INVALID_NAME", _s.NewCourier(new(" ", null)).error);
     }
 }

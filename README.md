@@ -38,7 +38,7 @@
 - `src/ApiHost` — ASP.NET Core 9 minimal API, хранилище на PostgreSQL (`Store.cs`), миграции схемы (`Db/`), авторизация (`Auth.cs`), проверка конфигурации при запуске (`StartupChecks.cs`), фоновое назначение курьеров (`AssignmentRetryService.cs`).
 - `src/Contracts` — DTO и перечисления; `OrderModule`, `DeliveryModule`, `CourierModule`, `CustomerModule` — бизнес-правила каждого модуля (`*Rules.cs`), общение через контракты.
 - `tools/SqliteImport` — разовый перенос данных из старой версии (SQLite) в PostgreSQL.
-- `tests/` — 248 тестов (правила модулей, сценарии, миграции, идемпотентность, фоновое назначение, конфигурация, HTTP-API и роли на реальном PostgreSQL).
+- `tests/` — 252 теста (правила модулей, сценарии, миграции, идемпотентность, фоновое назначение, конфигурация, HTTP-API и роли на реальном PostgreSQL).
 - `docs/` — этапы курсового, ADR, архитектура, тесты.
 
 ![Архитектура](docs/img/architecture.png)

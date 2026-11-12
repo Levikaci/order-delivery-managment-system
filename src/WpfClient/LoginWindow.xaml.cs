@@ -20,13 +20,27 @@ public partial class LoginWindow : Window
         {
             App.Api.SetServer(Server.Text.Trim());
             await App.Api.LoginAsync(Login.Text.Trim(), Password.Password);
-            var main = new MainWindow();
-            Application.Current.MainWindow = main;
-            main.Show();
-            Close();
+            OpenMain();
         }
         catch (ApiException ex) { Error.Text = ex.Message; }
-        catch (UriFormatException) { Error.Text = "Некорректный адрес сервера"; }
+        catch (UriFormatException ex) { Error.Text = ex.Message; }
         finally { Go.IsEnabled = true; }
+    }
+
+    private void OpenMain()
+    {
+        var main = new MainWindow();
+        Application.Current.MainWindow = main;
+        main.Show();
+        Close();
+    }
+
+    /// <summary>Регистрация нового клиента на указанном сервере; после успешной регистрации вход выполняется сразу.</summary>
+    private void Register_Click(object sender, RoutedEventArgs e)
+    {
+        Error.Text = "";
+        try { App.Api.SetServer(Server.Text.Trim()); }
+        catch (UriFormatException ex) { Error.Text = ex.Message; return; }
+        if (new RegisterDialog(this).ShowDialog() == true) OpenMain();
     }
 }

@@ -40,6 +40,26 @@ INSERT INTO order_history(order_id,status,at,comment) VALUES('{Order}','Created'
     }
 
     [Fact]
+    public void Migration6_CourierWithSeveralActiveDeliveries_KeepsOneAndRequeuesOthers()
+    {
+        Migrator.Apply(_ds, Migrations.All, upTo: 5);
+        InsertV1Data();                                              // доставка Deliv: Assigned у курьера Cour
+        var o2 = Guid.NewGuid(); var d2 = Guid.NewGuid(); var o3 = Guid.NewGuid(); var d3 = Guid.NewGuid();
+        _db.Sql($@"
+INSERT INTO orders(id,customer_id,address,status,created_at) VALUES('{o2}','{Cust}','г. В','InDelivery',now()),('{o3}','{Cust}','г. В','Confirmed',now());
+INSERT INTO deliveries(id,order_id,courier_id,status,created_at,started_at) VALUES('{d2}','{o2}','{Cour}','InTransit',now(),now());
+INSERT INTO deliveries(id,order_id,courier_id,status,created_at) VALUES('{d3}','{o3}','{Cour}','Assigned',now());");
+
+        Migrator.Apply(_ds, Migrations.All);                         // раньше падало на создании уникального индекса
+
+        Assert.Equal(1L, _db.Scalar<long>($"SELECT COUNT(*) FROM deliveries WHERE courier_id='{Cour}' AND status IN ('Assigned','Accepted','InTransit')"));
+        Assert.Equal("InTransit", _db.Scalar<string>($"SELECT status FROM deliveries WHERE id='{d2}'"));   // уже в пути — остаётся у курьера
+        Assert.Equal(2L, _db.Scalar<long>("SELECT COUNT(*) FROM deliveries WHERE status='Created' AND courier_id IS NULL"));
+        Assert.Equal(2L, _db.Scalar<long>("SELECT COUNT(*) FROM orders WHERE status='Created'"));
+        Assert.Equal(2L, _db.Scalar<long>("SELECT COUNT(*) FROM status_history WHERE comment LIKE 'Возвращена в очередь%'"));
+    }
+
+    [Fact]
     public void Upgrade_FromV1_KeepsAllExistingRecords()
     {
         Migrator.Apply(_ds, Migrations.All, upTo: 1);

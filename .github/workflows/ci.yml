@@ -28,3 +28,18 @@ jobs:
       - run: dotnet restore OrderDeliveryManagementSystem.sln
       - run: dotnet build OrderDeliveryManagementSystem.sln --no-restore -c Release -p:EnableWindowsTargeting=true
       - run: dotnet test OrderDeliveryManagementSystem.sln --no-build -c Release --logger "trx;LogFileName=results.trx"
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Локальный docker-compose.yml корректен
+        run: docker compose config -q
+      - name: Рабочий compose не запускается без пароля БД
+        run: |
+          if docker compose -f docker-compose.prod.yml config -q 2>/dev/null; then
+            echo "docker-compose.prod.yml принимает пустой POSTGRES_PASSWORD"; exit 1
+          fi
+          POSTGRES_PASSWORD=ci-only-Xq81-pass docker compose -f docker-compose.prod.yml config -q
+      - name: Образ API собирается
+        run: docker build -t odms-api .

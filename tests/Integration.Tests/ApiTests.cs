@@ -13,9 +13,38 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     public TestDb Db { get; }
     private readonly bool _ownsDb;
-    public ApiFactory(TestDb? db = null) { _ownsDb = db is null; Db = db ?? new TestDb(); }
-    protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder b) =>
-        b.UseSetting("ConnectionStrings:Default", Db.ConnectionString).UseSetting("Logging:LogLevel:Default", "Warning");
+    private readonly IReadOnlyDictionary<string, string> _settings;
+    private readonly string? _remoteIp;
+    /// <param name="remoteIp">Адрес, с которого «приходят» запросы тестового сервера (по умолчанию адреса нет).</param>
+    public ApiFactory(TestDb? db = null, IReadOnlyDictionary<string, string>? settings = null, string? remoteIp = null)
+    {
+        _ownsDb = db is null; Db = db ?? new TestDb(); _settings = settings ?? new Dictionary<string, string>(); _remoteIp = remoteIp;
+    }
+
+    /// <summary>Новый экземпляр API на той же базе — как перезапуск сервера.</summary>
+    public ApiFactory Restart() => new(Db, _settings, _remoteIp);
+
+    /// <summary>Экземпляр API на той же базе с дополнительными настройками.</summary>
+    public ApiFactory WithSettings(Dictionary<string, string> settings, string? remoteIp = null) =>
+        new(Db, _settings.Concat(settings).GroupBy(x => x.Key).ToDictionary(g => g.Key, g => g.Last().Value), remoteIp ?? _remoteIp);
+
+    private sealed class RemoteIpFilter(string ip) : Microsoft.AspNetCore.Hosting.IStartupFilter
+    {
+        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+        {
+            app.Use(next2 => ctx => { ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse(ip); return next2(ctx); });
+            next(app);
+        };
+    }
+    protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder b)
+    {
+        b.UseSetting("ConnectionStrings:Default", Db.ConnectionString).UseSetting("Logging:LogLevel:Default", "Warning")
+         .UseSetting("Assignment:Enabled", "false"); // фоновое назначение проверяется отдельными тестами, здесь оно мешало бы сценариям
+        foreach (var (k, v) in _settings) b.UseSetting(k, v);
+        if (_remoteIp is { } ip)
+            b.ConfigureServices(s => Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions
+                .AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(s, new RemoteIpFilter(ip)));
+    }
     protected override void Dispose(bool disposing) { base.Dispose(disposing); if (_ownsDb && disposing) Db.Dispose(); }
 }
 
@@ -449,5 +478,24 @@ public class ApiScenarioTests : ApiTests
         Assert.Equal(0, F.Db.Scalar<long>("SELECT COUNT(*) FROM orders"));
         F.Db.Sql("DROP TRIGGER trap ON deliveries");
         Assert.Equal(HttpStatusCode.OK, (await ivan.PostAsync("/api/orders", Json(OrderJson(ivanId, pizza)))).StatusCode);
+    }
+
+    [Fact]
+    public async Task TemporaryDatabaseUnavailability_Returns503_WithRetryAfter()
+    {
+        using var op = await LoginAsync("operator");
+        var (pizza, _, ivanId) = await DemoIds(op);
+        using var ivan = await LoginAsync("ivan");
+        // сервер БД завершает соединение (код 57P01, как при перезапуске PostgreSQL) — сбой временный
+        F.Db.Sql(@"CREATE FUNCTION shutdown_boom() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'restarting' USING ERRCODE = '57P01'; END $$ LANGUAGE plpgsql;
+                   CREATE TRIGGER trap2 BEFORE INSERT ON deliveries FOR EACH ROW EXECUTE FUNCTION shutdown_boom();");
+        var r = await ivan.PostAsync("/api/orders", Json(OrderJson(ivanId, pizza)));
+        F.Db.Sql("DROP TRIGGER trap2 ON deliveries");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, r.StatusCode);
+        Assert.NotNull(r.Headers.RetryAfter);
+        var b = await Body(r);
+        Assert.Equal("STORAGE_ERROR", b["errorCode"]!.ToString());
+        Assert.DoesNotContain("restarting", b.ToJsonString());
+        Assert.Equal(0, F.Db.Scalar<long>("SELECT COUNT(*) FROM orders"));
     }
 }

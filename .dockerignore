@@ -1,5 +1,12 @@
+data/
+*.db
 **/bin
 **/obj
 .git
 docs
 *.docx
+.env
+.env.*
+**/appsettings.Local.json
+**/appsettings.Production.json
+tests/**/TestResults

@@ -21,6 +21,9 @@ public partial class OrderDialog : Window
 {
     private readonly List<ProductRow> _rows = new();
     private readonly List<JsonNode> _addresses;
+    private readonly int _off; // 1 — в списке есть пункт «текущий адрес заказа»
+    private bool KeepCurrent => _off == 1 && Saved.SelectedIndex == 0;
+    private int SavedIndex => Saved.SelectedIndex - _off; // индекс в _addresses или < 0
     public Guid CustomerId { get; }
 
     public OrderDialog(Window owner, JsonArray products, JsonArray addresses, Guid customerId, JsonNode? existing = null)
@@ -37,8 +40,11 @@ public partial class OrderDialog : Window
         }
         Items.ItemsSource = _rows;
         _addresses = addresses.Select(a => a!).ToList();
+        // при изменении заказа первым пунктом идёт его текущий адрес: его не нужно вводить заново
+        _off = existing is null ? 0 : 1;
+        if (existing is not null) Saved.Items.Add("Текущий адрес заказа: " + (existing["address"]?.ToString() ?? "—"));
         foreach (var a in _addresses) Saved.Items.Add(a["text"]?.ToString() ?? $"{a["city"]}, {a["street"]}, {a["house"]}");
-        if (_addresses.Count > 0 && existing is null) Saved.SelectedIndex = 0;
+        if (Saved.Items.Count > 0) Saved.SelectedIndex = 0;
         Comment.Text = existing?["comment"]?.ToString() ?? "";
         UpdateTotal();
     }
@@ -50,11 +56,12 @@ public partial class OrderDialog : Window
 
     private async void DelAddr_Click(object sender, RoutedEventArgs e)
     {
-        if (Saved.SelectedIndex < 0) return;
+        if (SavedIndex < 0) return;
         try
         {
-            await App.Api.DeleteAsync("api/addresses/" + _addresses[Saved.SelectedIndex]["id"]);
-            _addresses.RemoveAt(Saved.SelectedIndex); Saved.Items.RemoveAt(Saved.SelectedIndex);
+            var i = SavedIndex;
+            await App.Api.DeleteAsync("api/addresses/" + _addresses[i]["id"]);
+            _addresses.RemoveAt(i); Saved.Items.RemoveAt(i + _off);
         }
         catch (ApiException ex) { MsgDialog.Info(this, ex.Message); }
     }
@@ -69,7 +76,8 @@ public partial class OrderDialog : Window
         var items = _rows.Where(r => r.Quantity > 0).Select(r => new { productId = r.Id, quantity = r.Quantity }).ToList();
         if (items.Count == 0) { MsgDialog.Info(this, "Добавьте в заказ хотя бы один товар"); return; }
         var body = new Dictionary<string, object?> { ["customerId"] = CustomerId, ["items"] = items, ["comment"] = Comment.Text.Trim(), ["requestId"] = _requestId };
-        if (Saved.SelectedIndex >= 0) body["addressId"] = Guid.Parse(_addresses[Saved.SelectedIndex]["id"]!.GetValue<string>());
+        if (KeepCurrent) { } // адрес не меняется — поля адреса не передаются
+        else if (SavedIndex >= 0) body["addressId"] = Guid.Parse(_addresses[SavedIndex]["id"]!.GetValue<string>());
         else
         {
             if (City.Text.Trim() == "" || Street.Text.Trim() == "" || House.Text.Trim() == "") { MsgDialog.Info(this, "Укажите город, улицу и дом"); return; }

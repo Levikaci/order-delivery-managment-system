@@ -19,6 +19,9 @@ public static class DeliveryRules
     /// <summary>Повторить можно только неудачную доставку: она возвращается в Created.</summary>
     public static bool CanRetry(DeliveryStatus s) => s == DeliveryStatus.Failed;
 
+    /// <summary>Доставка ждёт курьера: создана (или возвращена на повтор) и ещё никому не назначена.</summary>
+    public static bool AwaitsAssignment(DeliveryStatus s, bool hasCourier) => s == DeliveryStatus.Created && !hasCourier;
+
     public static bool CanTransition(DeliveryStatus from, DeliveryStatus to) =>
         Transitions.TryGetValue(from, out var next) && next.Contains(to);
 

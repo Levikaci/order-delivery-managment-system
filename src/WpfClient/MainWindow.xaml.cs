@@ -26,6 +26,7 @@ public class DeliveryRow
     public Brush StatusBg { get; init; } = Brushes.Transparent;
     public string Total { get; init; } = "";
     public string Created { get; init; } = "";
+    public DateTime CreatedAt { get; init; }
     public string Cat { get; init; } = "";
     public JsonNode Node { get; init; } = null!;
 }
@@ -76,7 +77,7 @@ public partial class MainWindow : Window
         else AddNav("deliveries", role == "client" ? "Мои заказы" : "Маршрутный лист");
         _nav["deliveries"].IsChecked = true;
         BuildTabs();
-        _timer.Tick += async (_, _) => { try { await Reload(); } catch { SetConn(false); } };
+        _timer.Tick += async (_, _) => await AutoReload();
         Loaded += async (_, _) => { await Safe(Reload); _timer.Start(); };
         Closed += (_, _) => _timer.Stop();
     }
@@ -138,7 +139,36 @@ public partial class MainWindow : Window
     private async Task Safe(Func<Task> f)
     {
         try { await f(); }
+        catch (ApiException ex) when (ex.Code == "UNAUTHORIZED") { await SessionEnded(); }
         catch (ApiException ex) { MsgDialog.Info(this, "Не удалось выполнить действие", ex.Message); if (ex.Code == "NO_CONNECTION") SetConn(false); }
+    }
+
+    private bool _reloading;
+    private bool _sessionEnded;
+
+    /// <summary>Автообновление по таймеру: без наложения запросов, если предыдущий ещё не завершился.</summary>
+    private async Task AutoReload()
+    {
+        if (_reloading || _sessionEnded) return;
+        _reloading = true;
+        try { await Reload(); }
+        catch (ApiException ex) when (ex.Code == "UNAUTHORIZED") { await SessionEnded(); }
+        catch { SetConn(false); }
+        finally { _reloading = false; }
+    }
+
+    /// <summary>
+    /// Сервер больше не принимает токен (истёк срок, сменён пароль на другом устройстве, учётная запись удалена):
+    /// вместо бесконечного «Нет связи с сервером» — сообщение и возврат к окну входа.
+    /// </summary>
+    private async Task SessionEnded()
+    {
+        if (_sessionEnded) return;
+        _sessionEnded = true;
+        _timer.Stop();
+        MsgDialog.Info(this, "Сеанс завершён", "Войдите в систему снова.");
+        await Api.LogoutAsync();
+        var l = new LoginWindow(); Application.Current.MainWindow = l; l.Show(); Close();
     }
 
     private async Task Reload()
@@ -169,7 +199,9 @@ public partial class MainWindow : Window
     private JsonArray Arr(string name) => _state[name]?.AsArray() ?? new JsonArray();
     private JsonNode? Find(string coll, string? id) => id is null ? null : Arr(coll).FirstOrDefault(x => x!["id"]!.ToString() == id);
     private string NameOf(string coll, string? id) => Find(coll, id)?["name"]?.ToString() ?? "—";
-    private static string Dt(JsonNode? n) => n is null ? "—" : DateTime.TryParse(n.ToString(), null, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var d) ? d.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : "—";
+    private static DateTime? ParseDt(JsonNode? n) =>
+        n is not null && DateTime.TryParse(n.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var d) ? d : null;
+    private static string Dt(JsonNode? n) => ParseDt(n) is { } d ? d.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : "—";
     private static string Cat(string st) => st == "Created" ? "new" : st is "Assigned" or "Accepted" or "InTransit" ? "active" : "done";
 
     // ---------- доставки
@@ -195,11 +227,12 @@ public partial class MainWindow : Window
                 Status = st, StatusText = Texts.D(st), StatusFg = Fg(st), StatusBg = Bgc(st),
                 Total = Money(d["total"]?.ToString()),
                 Created = Dt(d["createdAt"]),
+                CreatedAt = ParseDt(d["createdAt"]) ?? DateTime.MinValue,
                 Cat = Cat(st),
                 Node = d
             });
         }
-        all = all.OrderByDescending(r => r.Node["createdAt"]!.ToString()).ToList();
+        all = all.OrderByDescending(r => r.CreatedAt).ToList(); // по времени, а не по строке (дробные секунды, часовой пояс)
         int n(string c) => all.Count(r => r.Cat == c);
         StTotal.Text = all.Count.ToString(); StNew.Text = n("new").ToString(); StActive.Text = n("active").ToString();
         StDone.Text = all.Count(r => r.Status == "Delivered").ToString(); StFail.Text = all.Count(r => r.Status is "Failed" or "Cancelled").ToString();
@@ -532,10 +565,26 @@ public partial class MainWindow : Window
         if (dlg.ShowDialog() != true) return;
         if (existing is null)
         {
-            var r = await Api.PostAsync("api/orders", dlg.Body);
+            var r = await CreateOrderWithRetryAsync(dlg.Body);
             MsgDialog.Info(this, "Заказ оформлен", r?["message"]?.ToString() ?? "Заказ создан");
         }
         else await Api.PutAsync($"api/orders/{existing["orderId"]}", dlg.Body);
+    }
+
+    /// <summary>
+    /// Создание заказа с повтором при обрыве связи или временной ошибке сервера. Тело (и requestId) не меняется,
+    /// поэтому если первый запрос успел дойти до сервера, повтор вернёт тот же заказ, а не создаст второй.
+    /// </summary>
+    private async Task<JsonNode?> CreateOrderWithRetryAsync(Dictionary<string, object?> body)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { return await Api.PostAsync("api/orders", body); }
+            catch (ApiException ex) when (ex.Code is "NO_CONNECTION" or "STORAGE_ERROR" && attempt < 3)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(attempt));
+            }
+        }
     }
 
     // ---------- справочники оператора

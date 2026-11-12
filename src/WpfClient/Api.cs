@@ -20,18 +20,44 @@ public class Api
     public Guid? RefId { get; private set; }
     public string UserName { get; private set; } = "";
 
+    /// <summary>
+    /// Адрес сервера из поля ввода: «localhost:8080» дополняется до «http://localhost:8080/».
+    /// Допустимы только http и https; иначе — UriFormatException с понятным текстом.
+    /// </summary>
+    public static Uri ServerUri(string url)
+    {
+        url = (url ?? "").Trim();
+        if (url.Length == 0) throw new UriFormatException("Укажите адрес сервера, например http://localhost:8080");
+        if (!url.Contains("://")) url = "http://" + url;
+        if (!Uri.TryCreate(url.TrimEnd('/') + "/", UriKind.Absolute, out var u) || (u.Scheme != Uri.UriSchemeHttp && u.Scheme != Uri.UriSchemeHttps) || u.Host.Length == 0)
+            throw new UriFormatException("Некорректный адрес сервера. Пример: http://localhost:8080");
+        return u;
+    }
+
     public void SetServer(string url)
     {
         // HttpClient нельзя менять после первого запроса (повторный вход) — создаём заново.
         _http.Dispose();
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15), BaseAddress = new Uri(url.TrimEnd('/') + "/") };
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15), BaseAddress = ServerUri(url) };
         Role = null; RefId = null; UserName = "";
     }
 
     public async Task LoginAsync(string login, string password)
     {
         var r = await SendAsync(HttpMethod.Post, "api/auth/login", new { login, password });
-        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", r!["token"]!.GetValue<string>());
+        ApplySession(r!, login);
+    }
+
+    /// <summary>Самостоятельная регистрация клиента; после неё сразу выполняется вход.</summary>
+    public async Task RegisterAsync(string name, string? phone, string login, string password)
+    {
+        var r = await SendAsync(HttpMethod.Post, "api/auth/register", new { name, phone, login, password });
+        ApplySession(r!, login);
+    }
+
+    private void ApplySession(JsonNode r, string login)
+    {
+        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", r["token"]!.GetValue<string>());
         Role = r["role"]!.GetValue<string>();
         RefId = Guid.TryParse(r["refId"]?.ToString(), out var g) ? g : null;
         UserName = r["name"]?.ToString() ?? login;

@@ -25,6 +25,7 @@
             <PasswordBox x:Name="Password"/>
             <TextBlock x:Name="Error" Foreground="{StaticResource Danger}" Margin="0,12,0,0" TextWrapping="Wrap" MinHeight="18"/>
             <Button x:Name="Go" Content="Войти" Style="{StaticResource Primary}" Margin="0,10,0,0" Padding="12,10" Click="Go_Click" IsDefault="True"/>
+            <Button x:Name="Reg" Content="Создать учётную запись клиента" Style="{StaticResource Ghost}" Margin="0,8,0,0" Padding="12,8" Click="Register_Click"/>
         </StackPanel>
         <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="44,16,44,12">
             <StackPanel>

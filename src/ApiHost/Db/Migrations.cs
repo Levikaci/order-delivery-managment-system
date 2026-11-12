@@ -65,5 +65,37 @@ CREATE TABLE sessions(
   name text NOT NULL, expires_at timestamptz NOT NULL);
 CREATE INDEX ix_sessions_user ON sessions(user_id);
 CREATE INDEX ix_sessions_expires ON sessions(expires_at);"),
+
+        new(5, "order_request_hash", @"
+-- отпечаток (SHA-256) значимых полей запроса создания заказа: повтор requestId с другими данными — конфликт.
+-- У заказов, созданных до этой миграции, отпечатка нет: повтор их requestId возвращает заказ, как раньше.
+ALTER TABLE orders ADD COLUMN request_hash bytea NULL;"),
+
+        new(6, "pending_assignment", @"
+-- очередь фонового назначения: доставки в статусе Created без курьера, от старых к новым
+CREATE INDEX ix_deliveries_pending ON deliveries(created_at, id) WHERE status = 'Created' AND courier_id IS NULL;
+-- Если у курьера уже несколько активных доставок (данные версий до 2.2.0), индекс не создастся.
+-- Оставляем курьеру самую продвинутую (в пути > принята > назначена, затем более раннюю), остальные
+-- возвращаем в очередь назначения (Created, без курьера) с записью в истории — их назначит фоновая служба.
+CREATE TEMP TABLE m6_extra ON COMMIT DROP AS
+SELECT id, order_id FROM (
+  SELECT d.id, d.order_id, row_number() OVER (PARTITION BY d.courier_id ORDER BY
+           CASE d.status WHEN 'InTransit' THEN 0 WHEN 'Accepted' THEN 1 ELSE 2 END, d.created_at, d.id) AS n
+  FROM deliveries d WHERE d.courier_id IS NOT NULL AND d.status IN ('Assigned','Accepted','InTransit')) x
+WHERE n > 1;
+UPDATE deliveries SET status='Created', courier_id=NULL, started_at=NULL WHERE id IN (SELECT id FROM m6_extra);
+INSERT INTO status_history(delivery_id,status,at,comment)
+  SELECT id,'Created',now(),'Возвращена в очередь назначения: у курьера было несколько активных доставок' FROM m6_extra;
+UPDATE orders SET status='Created' WHERE id IN (SELECT order_id FROM m6_extra);
+INSERT INTO order_history(order_id,status,at,comment)
+  SELECT order_id,'Created',now(),'Возвращён в очередь назначения курьера' FROM m6_extra;
+-- у курьера не больше одной активной доставки — гарантия на уровне БД, а не только флага couriers.state
+CREATE UNIQUE INDEX ux_deliveries_active_courier ON deliveries(courier_id) WHERE status IN ('Assigned','Accepted','InTransit');"),
+
+        new(7, "rate_limits", @"
+-- счётчики неудачных входов и попыток регистрации: общие для всех экземпляров API и переживают перезапуск
+CREATE TABLE rate_limits(
+  key text PRIMARY KEY, hits int NOT NULL, window_start timestamptz NOT NULL);
+CREATE INDEX ix_rate_limits_window ON rate_limits(window_start);"),
     };
 }

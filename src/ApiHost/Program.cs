@@ -5,11 +5,32 @@ var builder = WebApplication.CreateBuilder(args);
 // Порт по умолчанию 8080 (как в клиенте, Docker и README), если адрес не задан --urls / ASPNETCORE_URLS / launchSettings.
 if (string.IsNullOrEmpty(builder.Configuration["urls"]) && string.IsNullOrEmpty(builder.Configuration["http_ports"]))
     builder.WebHost.UseUrls("http://localhost:8080");
-builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(allowIntegerValues: false)));
 builder.Services.AddSingleton<Store>();
 builder.Services.AddSingleton<AuthService>();
+builder.Services.AddSingleton<LoginThrottle>();
+builder.Services.AddSingleton<RegistrationThrottle>();
+// повторное автоназначение курьеров доставкам, оставшимся в статусе Created (сбой БД, нет свободных курьеров)
+builder.Services.AddHostedService<AssignmentRetryService>();
+
+// За обратным прокси (nginx и т. п.) адрес клиента берётся из X-Forwarded-For, но только от доверенных прокси:
+// иначе любой клиент подделал бы заголовок и обошёл ограничения попыток входа и регистрации.
+var proxies = builder.Configuration["ForwardedHeaders:KnownProxies"] ?? "";
+var networks = builder.Configuration["ForwardedHeaders:KnownNetworks"] ?? "";
+var useForwarded = builder.Configuration.GetValue("ForwardedHeaders:Enabled", false) || proxies.Trim().Length > 0 || networks.Trim().Length > 0;
+if (useForwarded)
+    builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(o =>
+    {
+        o.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+        o.ForwardLimit = 1; // учитывается только адрес, добавленный ближайшим доверенным прокси
+        foreach (var p in proxies.Split(',', ';', ' ').Where(x => x.Length > 0)) o.KnownProxies.Add(System.Net.IPAddress.Parse(p));
+        foreach (var n in networks.Split(',', ';', ' ').Where(x => x.Length > 0)) o.KnownNetworks.Add(Microsoft.AspNetCore.HttpOverrides.IPNetwork.Parse(n));
+    });
 
 var app = builder.Build();
+if (useForwarded) app.UseForwardedHeaders();
+// Вне Development сервер не стартует со стандартными паролями, демо-пользователями и без строки подключения.
+StartupChecks.EnsureValid(app.Configuration, app.Environment);
 app.Services.GetRequiredService<Store>(); // применить миграции при старте: при ошибке приложение не запускается с повреждённой схемой
 
 // Единый формат ошибок (ErrorResponse из ТЗ): { success:false, errorCode, message }.
@@ -25,8 +46,10 @@ var messages = new Dictionary<string, string>
     ["DELIVERY_NOT_FOUND"] = "Доставка не найдена",
     ["ADDRESS_NOT_FOUND"] = "Адрес не найден",
     ["PRODUCT_NOT_FOUND"] = "Товар не найден",
-    ["INVALID_ADDRESS"] = "Укажите город, улицу и дом",
-    ["INVALID_NAME"] = "Укажите имя",
+    ["INVALID_ADDRESS"] = "Укажите город, улицу и дом (до 100 символов каждое, квартира — до 20)",
+    ["INVALID_NAME"] = "Укажите имя (не длиннее 100 символов)",
+    ["INVALID_PHONE"] = "Телефон: до 32 символов — цифры, пробелы, «+», «-» и скобки",
+    ["INVALID_COMMENT"] = "Комментарий не должен быть длиннее 500 символов",
     ["INVALID_PRODUCT"] = "Укажите название и цену товара",
     ["EMPTY_ORDER"] = "Добавьте в заказ хотя бы один товар",
     ["INVALID_QUANTITY"] = "Количество должно быть от 1 до 99",
@@ -43,22 +66,28 @@ var messages = new Dictionary<string, string>
     ["UNAUTHORIZED_STATUS_CHANGE"] = "Вы не можете изменить этот статус (отмена возможна только до передачи в доставку)",
     ["FAILURE_REASON_REQUIRED"] = "Укажите причину, по которой доставка не выполнена",
     ["ORDER_NOT_EDITABLE"] = "Заказ нельзя изменить после принятия курьером",
-    ["WEAK_PASSWORD"] = "Новый пароль должен быть не короче 8 символов и отличаться от старого",
+    ["WEAK_PASSWORD"] = "Пароль должен быть не короче 8 символов, не совпадать с логином, старым паролем и стандартными значениями",
+    ["TOO_MANY_ATTEMPTS"] = "Слишком много неудачных попыток входа. Повторите позже",
+    ["TOO_MANY_REGISTRATIONS"] = "Слишком много попыток регистрации. Повторите позже",
+    ["REGISTRATION_DISABLED"] = "Самостоятельная регистрация отключена. Обратитесь к оператору",
+    ["INVALID_LOGIN"] = "Логин: от 3 до 32 символов — латинские буквы, цифры, точка, дефис или подчёркивание",
     ["DELIVERY_NOT_FAILED"] = "Повторить можно только неудачную доставку",
+    ["IDEMPOTENCY_CONFLICT"] = "Этот requestId уже использован для заказа с другими данными. Для нового заказа нужен новый requestId",
     ["STORAGE_ERROR"] = "Временная ошибка хранилища данных. Повторите запрос позже",
     ["INTERNAL_ERROR"] = "Внутренняя ошибка сервера",
 };
 
-IResult Err(string code)
+IResult Err(string code, int? statusOverride = null)
 {
-    var status = code switch
+    var status = statusOverride ?? code switch
     {
         "UNAUTHORIZED" or "INVALID_CREDENTIALS" => 401,
-        "FORBIDDEN" or "UNAUTHORIZED_STATUS_CHANGE" => 403,
+        "TOO_MANY_ATTEMPTS" or "TOO_MANY_REGISTRATIONS" => 429,
+        "FORBIDDEN" or "UNAUTHORIZED_STATUS_CHANGE" or "REGISTRATION_DISABLED" => 403,
         "STORAGE_ERROR" or "INTERNAL_ERROR" => 500,
         _ when code.EndsWith("NOT_FOUND") => 404,
         _ when code.EndsWith("HAS_ORDERS") || code.StartsWith("DELIVERY_ALREADY") || code is "COURIER_NOT_AVAILABLE" or "COURIER_BUSY"
-            or "INVALID_STATUS_TRANSITION" or "DELIVERY_NOT_FAILED" or "ORDER_NOT_EDITABLE" or "LOGIN_TAKEN" => 409,
+            or "INVALID_STATUS_TRANSITION" or "DELIVERY_NOT_FAILED" or "ORDER_NOT_EDITABLE" or "LOGIN_TAKEN" or "IDEMPOTENCY_CONFLICT" => 409,
         _ => 400
     };
     return Results.Json(new { success = false, errorCode = code, error = code, message = messages.GetValueOrDefault(code, code) }, statusCode: status);
@@ -71,10 +100,18 @@ app.UseExceptionHandler(h => h.Run(async ctx =>
     var code = ex switch
     {
         BadHttpRequestException or System.Text.Json.JsonException => "INVALID_REQUEST",
-        System.Data.Common.DbException or TimeoutException => "STORAGE_ERROR",
+        _ when Store.IsStorageError(ex) => "STORAGE_ERROR", // в том числе сетевые ошибки при недоступной БД
         _ => "INTERNAL_ERROR"
     };
     if (code != "INVALID_REQUEST") ctx.RequestServices.GetRequiredService<ILogger<Program>>().LogError(ex, "Необработанная ошибка запроса {Path}", ctx.Request.Path);
+    // база временно недоступна (нет соединения, таймаут) — 503 и Retry-After: запрос можно повторить;
+    // ошибка данных или SQL — 500, повтор того же запроса не поможет
+    if (code == "STORAGE_ERROR" && Store.IsTransient(ex))
+    {
+        ctx.Response.Headers.RetryAfter = "5";
+        await Err(code, 503).ExecuteAsync(ctx);
+        return;
+    }
     await Err(code).ExecuteAsync(ctx);
 }));
 
@@ -94,10 +131,27 @@ var api = app.MapGroup("/api");
 api.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 // --- вход ---
-api.MapPost("/auth/login", (HttpContext h, Store s, AuthService a, LoginRequest r) =>
-    s.Authenticate(r?.Login, r?.Password) is { } me
-        ? Results.Ok(new { token = a.Start(me), role = me.Role, refId = me.RefId, name = me.Name })
-        : Err("INVALID_CREDENTIALS"));
+api.MapPost("/auth/login", (HttpContext h, Store s, AuthService a, LoginThrottle t, LoginRequest r) =>
+{
+    var ip = h.Connection.RemoteIpAddress?.ToString(); // с учётом X-Forwarded-For от доверенного прокси
+    if (t.IsLocked(r?.Login, ip)) return Err("TOO_MANY_ATTEMPTS");
+    if (s.Authenticate(r?.Login, r?.Password) is not { } me)
+    {
+        t.Failed(r?.Login, ip);
+        return Err("INVALID_CREDENTIALS");
+    }
+    t.Succeeded(r?.Login, ip);
+    return Results.Ok(new { token = a.Start(me), role = me.Role, refId = me.RefId, name = me.Name });
+});
+// Регистрация клиента без участия оператора; курьеров и операторов по-прежнему создаёт только оператор.
+api.MapPost("/auth/register", (HttpContext h, Store s, AuthService a, RegistrationThrottle t, IConfiguration cfg, RegisterRequest r) =>
+{
+    if (!cfg.GetValue("Security:AllowRegistration", true)) return Err("REGISTRATION_DISABLED");
+    if (!t.TryAcquire(h.Connection.RemoteIpAddress?.ToString())) return Err("TOO_MANY_REGISTRATIONS");
+    var (me, e) = s.RegisterClient(r);
+    if (me is null) return Err(e ?? "INVALID_REQUEST");
+    return Results.Ok(new { token = a.Start(me), role = me.Role, refId = me.RefId, name = me.Name, login = r.Login.Trim() });
+});
 Roles(api.MapPost("/auth/logout", (HttpContext h, AuthService a) => { a.End(AuthService.Token(h.Request)!); return Results.Ok(); }));
 Roles(api.MapPost("/auth/password", (HttpContext h, Store s, ChangePasswordRequest r) =>
     s.ChangePassword(Me(h), r?.OldPassword, r?.NewPassword, AuthService.Token(h.Request) is { } t ? AuthService.HashToken(t) : null) is { } e ? Err(e) : Results.Ok()));
@@ -168,7 +222,8 @@ Roles(api.MapPost("/orders", (HttpContext h, Store s, CreateOrderRequest r) =>
         deliveryId = d.DeliveryId,
         courierId = d.CourierId,
         courierAssigned = assigned,
-        message = assigned ? "Заказ создан, курьер назначен" : "Заказ создан, но свободных курьеров нет. Назначение можно повторить: POST /api/deliveries/" + d.DeliveryId + "/assign"
+        message = assigned ? "Заказ создан, курьер назначен"
+            : "Заказ создан, свободного курьера пока нет: он будет назначен автоматически. Оператор может назначить вручную: POST /api/deliveries/" + d.DeliveryId + "/assign"
     });
 }), "client");
 Roles(api.MapGet("/orders/{id:guid}", (HttpContext h, Store s, Guid id) =>
@@ -189,6 +244,7 @@ Roles(api.MapPost("/deliveries", (HttpContext h, Store s, CreateDeliveryBody b) 
 Roles(api.MapGet("/deliveries", (HttpContext h, Store s, string? q, DeliveryStatus? status, Guid? courierId, Guid? customerId) =>
 {
     var me = Me(h);
+    if (status is { } st && !Enum.IsDefined(st)) return Err("INVALID_REQUEST"); // числовое значение вне перечисления
     if (me.Role == "client") customerId = me.RefId;
     if (me.Role == "courier") courierId = me.RefId;
     return Results.Ok(s.Deliveries(q, status, courierId, customerId));

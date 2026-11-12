@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using CustomerModule;
 
 namespace ApiHost;
@@ -19,10 +22,42 @@ public record AddressDto(string City, string Street, string House, string? Apart
 
 public record NewPerson(string Name, string? Phone, string? Login = null, string? Password = null);
 public record ItemRequest(Guid ProductId, int Quantity);
-/// <summary>RequestId — необязательный ключ идемпотентности: повтор запроса с тем же ключом не создаёт второй заказ.</summary>
+/// <summary>
+/// RequestId — необязательный ключ идемпотентности в рамках клиента: повтор запроса с тем же ключом и теми же данными
+/// возвращает уже созданный заказ, с другими данными — 409 IDEMPOTENCY_CONFLICT.
+/// </summary>
 public record CreateOrderRequest(Guid CustomerId, List<ItemRequest>? Items, AddressDto? DeliveryAddress = null,
     Guid? AddressId = null, string? Comment = null, bool SaveAddress = false,
-    Guid? RequestId = null);
+    Guid? RequestId = null)
+{
+    /// <summary>
+    /// Отпечаток значимых полей запроса (SHA-256 нормализованного JSON): клиент, товары с количеством
+    /// (одинаковые товары суммируются, порядок не важен), адрес (сохранённый или введённый), комментарий,
+    /// признак сохранения адреса. Пробелы по краям и пустые значения не влияют, как и при сохранении заказа.
+    /// RequestId в отпечаток не входит.
+    /// </summary>
+    public byte[] Fingerprint()
+    {
+        static string? Norm(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+        var items = (Items ?? new()).GroupBy(i => i.ProductId)
+            .Select(g => new { product = g.Key, quantity = g.Sum(i => (long)i.Quantity) })
+            .OrderBy(i => i.product).ToList();
+        // при выбранном сохранённом адресе введённый адрес и флаг сохранения сервер не использует
+        object? address = AddressId is Guid id ? new { id }
+            : DeliveryAddress is { } a ? new { city = Norm(a.City), street = Norm(a.Street), house = Norm(a.House), apartment = Norm(a.Apartment) }
+            : null;
+        var canonical = JsonSerializer.Serialize(new
+        {
+            v = 1,
+            customer = CustomerId,
+            items,
+            address,
+            comment = Norm(Comment),
+            saveAddress = AddressId is null && DeliveryAddress is not null && SaveAddress,
+        });
+        return SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+    }
+}
 /// <summary>Comment: null — не менять, пустая строка — очистить.</summary>
 public record UpdateOrderRequest(List<ItemRequest>? Items, AddressDto? DeliveryAddress = null, Guid? AddressId = null, string? Comment = null);
 public record CreateDeliveryBody(Guid OrderId);
@@ -32,6 +67,8 @@ public record CourierStateRequest(CourierState State);
 public record ProductRequest(string Name, decimal Price);
 public record AddressRequest(string? Label, string City, string Street, string House, string? Apartment);
 public record LoginRequest(string Login, string Password);
+/// <summary>Самостоятельная регистрация клиента: имя, необязательный телефон, логин и пароль.</summary>
+public record RegisterRequest(string Name, string? Phone, string Login, string Password);
 public record ChangePasswordRequest(string OldPassword, string NewPassword);
 
 public record StatusChange(DeliveryStatus Status, DateTime At, string? Comment, Guid? ActorId = null);

@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <Using Include="Contracts" />
+    <InternalsVisibleTo Include="Integration.Tests" />
   </ItemGroup>
 
 </Project>

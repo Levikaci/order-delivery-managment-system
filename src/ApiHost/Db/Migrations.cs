@@ -70,5 +70,11 @@ CREATE INDEX ix_sessions_expires ON sessions(expires_at);"),
 -- отпечаток (SHA-256) значимых полей запроса создания заказа: повтор requestId с другими данными — конфликт.
 -- У заказов, созданных до этой миграции, отпечатка нет: повтор их requestId возвращает заказ, как раньше.
 ALTER TABLE orders ADD COLUMN request_hash bytea NULL;"),
+
+        new(6, "pending_assignment", @"
+-- очередь фонового назначения: доставки в статусе Created без курьера, от старых к новым
+CREATE INDEX ix_deliveries_pending ON deliveries(created_at, id) WHERE status = 'Created' AND courier_id IS NULL;
+-- у курьера не больше одной активной доставки — гарантия на уровне БД, а не только флага couriers.state
+CREATE UNIQUE INDEX ux_deliveries_active_courier ON deliveries(courier_id) WHERE status IN ('Assigned','Accepted','InTransit');"),
     };
 }

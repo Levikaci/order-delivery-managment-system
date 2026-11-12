@@ -13,9 +13,17 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     public TestDb Db { get; }
     private readonly bool _ownsDb;
-    public ApiFactory(TestDb? db = null) { _ownsDb = db is null; Db = db ?? new TestDb(); }
-    protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder b) =>
-        b.UseSetting("ConnectionStrings:Default", Db.ConnectionString).UseSetting("Logging:LogLevel:Default", "Warning");
+    private readonly IReadOnlyDictionary<string, string> _settings;
+    public ApiFactory(TestDb? db = null, IReadOnlyDictionary<string, string>? settings = null)
+    {
+        _ownsDb = db is null; Db = db ?? new TestDb(); _settings = settings ?? new Dictionary<string, string>();
+    }
+    protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder b)
+    {
+        b.UseSetting("ConnectionStrings:Default", Db.ConnectionString).UseSetting("Logging:LogLevel:Default", "Warning")
+         .UseSetting("Assignment:Enabled", "false"); // фоновое назначение проверяется отдельными тестами, здесь оно мешало бы сценариям
+        foreach (var (k, v) in _settings) b.UseSetting(k, v);
+    }
     protected override void Dispose(bool disposing) { base.Dispose(disposing); if (_ownsDb && disposing) Db.Dispose(); }
 }
 

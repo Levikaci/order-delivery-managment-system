@@ -704,35 +704,103 @@ public class Store : IDisposable
         try { return Assign(deliveryId, null, actor) is null; }
         catch (Exception ex) when (ex is DbException or TimeoutException)
         {
-            // заказ уже сохранён, доставка осталась Created: оператор назначит курьера позже
-            _log.LogError(ex, "Не удалось автоматически назначить курьера для доставки {Delivery}", deliveryId);
+            // заказ уже сохранён, доставка осталась Created: её подхватит фоновое назначение или оператор
+            _log.LogError(ex, "Не удалось автоматически назначить курьера для доставки {DeliveryId}, повтор — в фоне", deliveryId);
             return false;
         }
     }
 
-    /// <summary>Назначает курьера. Без courierId выбирается свободный курьер с наименьшим числом доставок за последние 24 часа (при равенстве — по имени) (повторное назначение).</summary>
+    /// <summary>
+    /// Назначает курьера. Без courierId выбирается свободный курьер с наименьшим числом доставок за последние 24 часа
+    /// (при равенстве — по имени). Курьер с активной доставкой не назначается, даже если его состояние указано неверно.
+    /// </summary>
     public string? Assign(Guid id, Guid? courierId, Session? actor = null)
     {
-        using var c = Open();
-        using var tx = c.BeginTransaction();
-        if (Cmd(c, "SELECT 1 FROM deliveries WHERE id=@i FOR UPDATE", ("i", id)).ExecuteScalar() is null) return "DELIVERY_NOT_FOUND";
-        var d = Deliveries(c, deliveryId: id).First();
-        if (d.Status != DeliveryStatus.Created)
-            return DeliveryRules.IsFinal(d.Status) ? "DELIVERY_ALREADY_COMPLETED" : "DELIVERY_ALREADY_ASSIGNED";
-        (Guid Id, string Name, CourierState State)? cr;
-        // FOR UPDATE: один курьер не достанется двум доставкам одновременно; SKIP LOCKED — берём следующего свободного
-        var sel = "SELECT id,name,state FROM couriers WHERE " + (courierId is null ? "state='Available' ORDER BY (SELECT COUNT(*) FROM deliveries d WHERE d.courier_id=couriers.id AND d.created_at > now() - interval '24 hours'), name FOR UPDATE SKIP LOCKED LIMIT 1" : "id=@c FOR UPDATE");
-        using (var r = Cmd(c, sel, courierId is null ? Array.Empty<(string, object?)>() : new (string, object?)[] { ("c", courierId) }).ExecuteReader())
-            cr = r.Read() ? (r.GetGuid(0), r.GetString(1), Enum.Parse<CourierState>(r.GetString(2))) : null;
-        if (cr is null) return courierId is null ? "COURIER_NOT_AVAILABLE" : "COURIER_NOT_FOUND";
-        if (!CourierRules.CanAssign(cr.Value.State)) return "COURIER_NOT_AVAILABLE";
-        Cmd(c, "UPDATE couriers SET state='Busy' WHERE id=@i", ("i", cr.Value.Id)).ExecuteNonQuery();
-        Cmd(c, "UPDATE deliveries SET courier_id=@c,status=@s WHERE id=@i", ("c", cr.Value.Id), ("s", nameof(DeliveryStatus.Assigned)), ("i", id)).ExecuteNonQuery();
-        Hist(c, id, DeliveryStatus.Assigned, "Назначен курьер " + cr.Value.Name, actor);
-        SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(DeliveryStatus.Assigned), null, actor);
-        tx.Commit();
-        _log.LogInformation("Доставка {Delivery}: назначен курьер {Courier}", id, cr.Value.Id);
+        Guid? assigned;
+        string? error;
+        using (var c = Open())
+        using (var tx = c.BeginTransaction())
+        {
+            if (Cmd(c, "SELECT 1 FROM deliveries WHERE id=@i FOR UPDATE", ("i", id)).ExecuteScalar() is null) return "DELIVERY_NOT_FOUND";
+            var d = Deliveries(c, deliveryId: id).First();
+            (assigned, error) = AssignLocked(c, d, courierId, actor, null);
+            if (error is not null) return error;
+            tx.Commit();
+        }
+        _log.LogInformation("Доставка {DeliveryId}: назначен курьер {CourierId}", id, assigned);
         return null;
+    }
+
+    private const string ActiveStatuses = "('Assigned','Accepted','InTransit')";
+    private const string PgUniqueActiveCourier = "ux_deliveries_active_courier";
+
+    /// <summary>Назначение внутри транзакции, в которой строка доставки уже заблокирована. Ошибка — транзакцию не фиксировать.</summary>
+    private static (Guid? courierId, string? error) AssignLocked(NpgsqlConnection c, Delivery d, Guid? courierId, Session? actor, string? note)
+    {
+        if (!DeliveryRules.AwaitsAssignment(d.Status, d.CourierId is not null))
+            return (null, DeliveryRules.IsFinal(d.Status) ? "DELIVERY_ALREADY_COMPLETED" : "DELIVERY_ALREADY_ASSIGNED");
+        (Guid Id, string Name, CourierState State, bool HasActive)? cr;
+        const string hasActive = "EXISTS(SELECT 1 FROM deliveries a WHERE a.courier_id=couriers.id AND a.status IN " + ActiveStatuses + ")";
+        // FOR UPDATE: один курьер не достанется двум доставкам одновременно; SKIP LOCKED — берём следующего свободного
+        var sel = courierId is null
+            ? "SELECT id,name,state,false FROM couriers WHERE state='Available' AND NOT " + hasActive +
+              " ORDER BY (SELECT COUNT(*) FROM deliveries d WHERE d.courier_id=couriers.id AND d.created_at > now() - interval '24 hours'), name FOR UPDATE SKIP LOCKED LIMIT 1"
+            : "SELECT id,name,state," + hasActive + " FROM couriers WHERE id=@c FOR UPDATE";
+        using (var r = Cmd(c, sel, courierId is null ? Array.Empty<(string, object?)>() : new (string, object?)[] { ("c", courierId) }).ExecuteReader())
+            cr = r.Read() ? (r.GetGuid(0), r.GetString(1), Enum.Parse<CourierState>(r.GetString(2)), r.GetBoolean(3)) : null;
+        if (cr is null) return (null, courierId is null ? "COURIER_NOT_AVAILABLE" : "COURIER_NOT_FOUND");
+        if (!CourierRules.CanAssign(cr.Value.State)) return (null, "COURIER_NOT_AVAILABLE");
+        if (cr.Value.HasActive) return (null, "COURIER_BUSY"); // состояние «Свободен», но активная доставка уже есть
+        Cmd(c, "UPDATE couriers SET state='Busy' WHERE id=@i", ("i", cr.Value.Id)).ExecuteNonQuery();
+        try
+        {
+            Cmd(c, "UPDATE deliveries SET courier_id=@c,status=@s WHERE id=@i", ("c", cr.Value.Id), ("s", nameof(DeliveryStatus.Assigned)), ("i", d.DeliveryId)).ExecuteNonQuery();
+        }
+        catch (PostgresException ex) when (ex.SqlState == PgUniqueViolation && ex.ConstraintName == PgUniqueActiveCourier)
+        {
+            return (null, "COURIER_BUSY"); // последняя линия защиты: уникальный индекс активных доставок курьера
+        }
+        Hist(c, d.DeliveryId, DeliveryStatus.Assigned, "Назначен курьер " + cr.Value.Name + (note is null ? "" : $" ({note})"), actor);
+        SetOrderStatus(c, d.OrderId, d.OrderStatus, DeliveryRules.ToOrderStatus(DeliveryStatus.Assigned), null, actor);
+        return (cr.Value.Id, null);
+    }
+
+    /// <summary>Итог одного прохода фонового назначения.</summary>
+    public readonly record struct PendingAssignmentResult(int Assigned, bool NoFreeCouriers);
+
+    /// <summary>
+    /// Фоновое назначение: по одной доставке в транзакции берёт самую старую доставку в статусе Created без курьера
+    /// (FOR UPDATE SKIP LOCKED — несколько экземпляров API и ручное назначение не мешают друг другу) и назначает
+    /// наименее загруженного свободного курьера. Останавливается, когда ожидающих доставок или свободных курьеров нет.
+    /// Ошибки БД пробрасываются вызывающему (фоновой службе), уже назначенные доставки остаются назначенными.
+    /// </summary>
+    public PendingAssignmentResult AssignPendingDeliveries(int batchSize, CancellationToken ct = default)
+    {
+        var assigned = 0;
+        for (var i = 0; i < batchSize && !ct.IsCancellationRequested; i++)
+        {
+            Guid deliveryId, courierId;
+            using (var c = Open())
+            using (var tx = c.BeginTransaction())
+            {
+                if (Cmd(c, @"SELECT id FROM deliveries WHERE status='Created' AND courier_id IS NULL
+                             ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT 1").ExecuteScalar() is not Guid id)
+                    return new(assigned, false);
+                var d = Deliveries(c, deliveryId: id).First();
+                var (cid, e) = AssignLocked(c, d, null, null, "повторное автоназначение");
+                if (e is "COURIER_NOT_AVAILABLE" or "COURIER_BUSY") return new(assigned, true);
+                if (e is not null)
+                {
+                    _log.LogWarning("Фоновое назначение: доставка {DeliveryId} пропущена ({ErrorCode})", id, e);
+                    continue;
+                }
+                tx.Commit();
+                deliveryId = id; courierId = cid!.Value;
+            }
+            assigned++;
+            _log.LogInformation("Фоновое назначение: доставка {DeliveryId} → курьер {CourierId}", deliveryId, courierId);
+        }
+        return new(assigned, false);
     }
 
     private static void SetOrderStatus(NpgsqlConnection c, Guid orderId, OrderStatus from, OrderStatus to, string? comment, Session? actor = null)

@@ -32,6 +32,9 @@ services:
       Seed__Demo: "false"
       # нужен только при первом запуске на пустой базе: пароль учётной записи operator (не короче 8 символов)
       Seed__OperatorPassword: "${OPERATOR_PASSWORD:-}"
+      # фоновое повторное назначение курьеров доставкам в статусе Created
+      Assignment__RetryIntervalSeconds: "${ASSIGNMENT_RETRY_INTERVAL:-15}"
+      Assignment__MaxBackoffSeconds: "${ASSIGNMENT_MAX_BACKOFF:-300}"
     restart: unless-stopped
 networks:
   backend:

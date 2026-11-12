@@ -9,6 +9,8 @@ builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Ad
 builder.Services.AddSingleton<Store>();
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<LoginThrottle>();
+// повторное автоназначение курьеров доставкам, оставшимся в статусе Created (сбой БД, нет свободных курьеров)
+builder.Services.AddHostedService<AssignmentRetryService>();
 
 var app = builder.Build();
 // Вне Development сервер не стартует со стандартными паролями, демо-пользователями и без строки подключения.
@@ -181,7 +183,8 @@ Roles(api.MapPost("/orders", (HttpContext h, Store s, CreateOrderRequest r) =>
         deliveryId = d.DeliveryId,
         courierId = d.CourierId,
         courierAssigned = assigned,
-        message = assigned ? "Заказ создан, курьер назначен" : "Заказ создан, но свободных курьеров нет. Назначение можно повторить: POST /api/deliveries/" + d.DeliveryId + "/assign"
+        message = assigned ? "Заказ создан, курьер назначен"
+            : "Заказ создан, свободного курьера пока нет: он будет назначен автоматически. Оператор может назначить вручную: POST /api/deliveries/" + d.DeliveryId + "/assign"
     });
 }), "client");
 Roles(api.MapGet("/orders/{id:guid}", (HttpContext h, Store s, Guid id) =>

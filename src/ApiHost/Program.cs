@@ -49,6 +49,7 @@ var messages = new Dictionary<string, string>
     ["WEAK_PASSWORD"] = "Пароль должен быть не короче 8 символов, не совпадать с логином, старым паролем и стандартными значениями",
     ["TOO_MANY_ATTEMPTS"] = "Слишком много неудачных попыток входа. Повторите позже",
     ["DELIVERY_NOT_FAILED"] = "Повторить можно только неудачную доставку",
+    ["IDEMPOTENCY_CONFLICT"] = "Этот requestId уже использован для заказа с другими данными. Для нового заказа нужен новый requestId",
     ["STORAGE_ERROR"] = "Временная ошибка хранилища данных. Повторите запрос позже",
     ["INTERNAL_ERROR"] = "Внутренняя ошибка сервера",
 };
@@ -63,7 +64,7 @@ IResult Err(string code)
         "STORAGE_ERROR" or "INTERNAL_ERROR" => 500,
         _ when code.EndsWith("NOT_FOUND") => 404,
         _ when code.EndsWith("HAS_ORDERS") || code.StartsWith("DELIVERY_ALREADY") || code is "COURIER_NOT_AVAILABLE" or "COURIER_BUSY"
-            or "INVALID_STATUS_TRANSITION" or "DELIVERY_NOT_FAILED" or "ORDER_NOT_EDITABLE" or "LOGIN_TAKEN" => 409,
+            or "INVALID_STATUS_TRANSITION" or "DELIVERY_NOT_FAILED" or "ORDER_NOT_EDITABLE" or "LOGIN_TAKEN" or "IDEMPOTENCY_CONFLICT" => 409,
         _ => 400
     };
     return Results.Json(new { success = false, errorCode = code, error = code, message = messages.GetValueOrDefault(code, code) }, statusCode: status);

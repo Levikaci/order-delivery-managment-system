@@ -553,10 +553,15 @@ public class Store : IDisposable
     {
         if (r is null) return (null, false, "INVALID_REQUEST");
         Guid id;
+        var fingerprint = r.RequestId is null ? null : r.Fingerprint();
         using (var c = Open())
         {
             if (Count(c, "SELECT COUNT(*) FROM customers WHERE id=@i", ("i", r.CustomerId)) == 0) return (null, false, "CUSTOMER_NOT_FOUND");
-            if (ExistingByRequest(c, r) is { } dup) return (dup, dup.CourierId is not null, null); // повторный запрос
+            switch (ExistingByRequest(c, r, fingerprint)) // повторный запрос
+            {
+                case (_, true): return (null, false, "IDEMPOTENCY_CONFLICT");
+                case ({ } dup, _): return (dup, dup.CourierId is not null, null);
+            }
             var (lines, e1) = ResolveItems(c, r.Items);
             if (lines is null) return (null, false, e1);
             var (text, inline, e2) = ResolveAddress(c, r.CustomerId, r.AddressId, r.DeliveryAddress);
@@ -566,9 +571,10 @@ public class Store : IDisposable
             using var tx = c.BeginTransaction();
             try
             {
-                Cmd(c, "INSERT INTO orders(id,customer_id,address,comment,status,created_at,request_id) VALUES(@i,@c,@a,@m,@s,@t,@rq)",
+                Cmd(c, "INSERT INTO orders(id,customer_id,address,comment,status,created_at,request_id,request_hash) VALUES(@i,@c,@a,@m,@s,@t,@rq,@rh)",
                     ("i", orderId), ("c", r.CustomerId), ("a", text),
-                    ("m", string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment.Trim()), ("s", nameof(OrderStatus.Created)), ("t", Now()), ("rq", r.RequestId)).ExecuteNonQuery();
+                    ("m", string.IsNullOrWhiteSpace(r.Comment) ? null : r.Comment.Trim()), ("s", nameof(OrderStatus.Created)), ("t", Now()),
+                    ("rq", r.RequestId), ("rh", fingerprint)).ExecuteNonQuery();
                 InsertItems(c, orderId, lines);
                 OrderHist(c, orderId, OrderStatus.Created, "Заказ создан", actor);
                 InsertDelivery(c, id, orderId, actor);
@@ -578,10 +584,14 @@ public class Store : IDisposable
             }
             catch (Exception ex) when (IsPg(ex, PgUniqueViolation) && r.RequestId is not null)
             {
-                // параллельный дубль того же запроса уже создал заказ
+                // параллельный запрос с тем же requestId уже создал заказ: тот же запрос — вернуть его, другой — конфликт
                 tx.Rollback();
                 using var c2 = Open();
-                if (ExistingByRequest(c2, r) is { } dup2) return (dup2, dup2.CourierId is not null, null);
+                switch (ExistingByRequest(c2, r, fingerprint))
+                {
+                    case (_, true): return (null, false, "IDEMPOTENCY_CONFLICT");
+                    case ({ } dup2, _): return (dup2, dup2.CourierId is not null, null);
+                }
                 throw;
             }
             _log.LogInformation("Создан заказ {Order}, доставка {Delivery}", orderId, id);
@@ -591,11 +601,22 @@ public class Store : IDisposable
         return (Delivery(id), assigned, null);
     }
 
-    private static Delivery? ExistingByRequest(NpgsqlConnection c, CreateOrderRequest r)
+    /// <summary>
+    /// Заказ, уже созданный этим клиентом с тем же requestId. conflict = true, если отпечаток сохранённого запроса
+    /// отличается от текущего (тот же ключ, но другие товары, количество, адрес или комментарий).
+    /// </summary>
+    private static (Delivery? d, bool conflict) ExistingByRequest(NpgsqlConnection c, CreateOrderRequest r, byte[]? fingerprint)
     {
-        if (r.RequestId is not Guid rid) return null;
-        return Cmd(c, "SELECT id FROM orders WHERE customer_id=@c AND request_id=@r", ("c", r.CustomerId), ("r", rid)).ExecuteScalar() is Guid oid
-            ? Deliveries(c, orderId: oid).FirstOrDefault() : null;
+        if (r.RequestId is not Guid rid) return (null, false);
+        Guid oid; byte[]? saved;
+        using (var x = Cmd(c, "SELECT id,request_hash FROM orders WHERE customer_id=@c AND request_id=@r", ("c", r.CustomerId), ("r", rid)).ExecuteReader())
+        {
+            if (!x.Read()) return (null, false);
+            oid = x.GetGuid(0); saved = x.IsDBNull(1) ? null : (byte[])x[1];
+        }
+        // у заказов до миграции 0005 отпечатка нет — сохраняем прежнее поведение и возвращаем заказ
+        if (saved is not null && fingerprint is not null && !CryptographicOperations.FixedTimeEquals(saved, fingerprint)) return (null, true);
+        return (Deliveries(c, orderId: oid).FirstOrDefault(), false);
     }
 
     private static void InsertItems(NpgsqlConnection c, Guid orderId, List<(Product p, int q)> lines)

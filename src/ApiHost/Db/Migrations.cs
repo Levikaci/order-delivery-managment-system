@@ -65,5 +65,10 @@ CREATE TABLE sessions(
   name text NOT NULL, expires_at timestamptz NOT NULL);
 CREATE INDEX ix_sessions_user ON sessions(user_id);
 CREATE INDEX ix_sessions_expires ON sessions(expires_at);"),
+
+        new(5, "order_request_hash", @"
+-- отпечаток (SHA-256) значимых полей запроса создания заказа: повтор requestId с другими данными — конфликт.
+-- У заказов, созданных до этой миграции, отпечатка нет: повтор их requestId возвращает заказ, как раньше.
+ALTER TABLE orders ADD COLUMN request_hash bytea NULL;"),
     };
 }

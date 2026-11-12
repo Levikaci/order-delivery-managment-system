@@ -91,5 +91,11 @@ INSERT INTO order_history(order_id,status,at,comment)
   SELECT order_id,'Created',now(),'Возвращён в очередь назначения курьера' FROM m6_extra;
 -- у курьера не больше одной активной доставки — гарантия на уровне БД, а не только флага couriers.state
 CREATE UNIQUE INDEX ux_deliveries_active_courier ON deliveries(courier_id) WHERE status IN ('Assigned','Accepted','InTransit');"),
+
+        new(7, "rate_limits", @"
+-- счётчики неудачных входов и попыток регистрации: общие для всех экземпляров API и переживают перезапуск
+CREATE TABLE rate_limits(
+  key text PRIMARY KEY, hits int NOT NULL, window_start timestamptz NOT NULL);
+CREATE INDEX ix_rate_limits_window ON rate_limits(window_start);"),
     };
 }

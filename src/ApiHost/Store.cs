@@ -179,6 +179,37 @@ public class Store : IDisposable
         return r.Read() ? new Session(r.GetString(0), GuidN(r, 1), r.GetString(2), GuidN(r, 3)) : null;
     }
 
+    // ---------- ограничение частоты (неудачные входы, регистрация) ----------
+    /// <summary>
+    /// Увеличивает счётчик по ключу и возвращает его новое значение. Если окно истекло, отсчёт начинается заново.
+    /// Счётчики хранятся в PostgreSQL: общие для всех экземпляров API и не сбрасываются перезапуском.
+    /// </summary>
+    public int RateLimitHit(string key, TimeSpan window, DateTimeOffset now)
+    {
+        using var c = Open();
+        var hits = (int)Cmd(c, @"INSERT INTO rate_limits(key,hits,window_start) VALUES(@k,1,@n)
+            ON CONFLICT(key) DO UPDATE SET
+              hits = CASE WHEN rate_limits.window_start <= @n - @w THEN 1 ELSE rate_limits.hits + 1 END,
+              window_start = CASE WHEN rate_limits.window_start <= @n - @w THEN @n ELSE rate_limits.window_start END
+            RETURNING hits", ("k", key), ("n", now.UtcDateTime), ("w", window)).ExecuteScalar()!;
+        if (RandomNumberGenerator.GetInt32(100) == 0) // изредка удаляем устаревшие записи, чтобы таблица не росла
+            Cmd(c, "DELETE FROM rate_limits WHERE window_start < @t", ("t", (now - TimeSpan.FromDays(1)).UtcDateTime)).ExecuteNonQuery();
+        return hits;
+    }
+
+    /// <summary>Текущее значение счётчика в пределах окна (0, если окно истекло или записи нет).</summary>
+    public int RateLimitCount(string key, TimeSpan window, DateTimeOffset now)
+    {
+        using var c = Open();
+        return Cmd(c, "SELECT hits FROM rate_limits WHERE key=@k AND window_start > @n - @w", ("k", key), ("n", now.UtcDateTime), ("w", window)).ExecuteScalar() is int n ? n : 0;
+    }
+
+    public void RateLimitReset(string key)
+    {
+        using var c = Open();
+        Cmd(c, "DELETE FROM rate_limits WHERE key=@k", ("k", key)).ExecuteNonQuery();
+    }
+
     public void DeleteSession(byte[] tokenHash)
     {
         using var c = Open();

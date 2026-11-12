@@ -32,69 +32,54 @@ public class AuthService
 }
 
 /// <summary>
-/// Ограничение подбора пароля: после MaxFailures неудачных попыток входа под одним логином в течение Window
-/// вход под этим логином временно отклоняется кодом TOO_MANY_ATTEMPTS (HTTP 429). Счётчик хранится в памяти экземпляра API.
+/// Ограничение подбора пароля: после MaxFailures неудачных попыток входа под одним логином с одного адреса
+/// в течение окна вход под этим логином с этого адреса временно отклоняется кодом TOO_MANY_ATTEMPTS (HTTP 429).
+/// Ключ «логин + адрес» не даёт постороннему заблокировать чужую учётную запись со своего адреса.
+/// Счётчики хранятся в PostgreSQL (таблица rate_limits): общие для экземпляров API и переживают перезапуск.
 /// </summary>
 public class LoginThrottle
 {
+    private readonly Store _store;
     private readonly int _maxFailures;
     private readonly TimeSpan _window;
     private readonly TimeProvider _time;
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (int Failures, DateTimeOffset Since)> _failures = new(StringComparer.OrdinalIgnoreCase);
 
-    public LoginThrottle(IConfiguration cfg, TimeProvider? time = null)
+    public LoginThrottle(Store store, IConfiguration cfg, TimeProvider? time = null)
     {
+        _store = store;
         _maxFailures = Math.Max(1, cfg.GetValue("Security:MaxLoginFailures", 5));
         _window = TimeSpan.FromSeconds(Math.Max(1, cfg.GetValue("Security:LoginLockoutSeconds", 300)));
         _time = time ?? TimeProvider.System;
     }
 
-    private static string Key(string? login) => (login ?? "").Trim();
+    private static string Key(string? login, string? address) =>
+        "login:" + (login ?? "").Trim().ToLowerInvariant() + "|" + (address ?? "-");
 
-    public bool IsLocked(string? login)
-    {
-        if (!_failures.TryGetValue(Key(login), out var f)) return false;
-        if (_time.GetUtcNow() - f.Since >= _window) { _failures.TryRemove(Key(login), out _); return false; }
-        return f.Failures >= _maxFailures;
-    }
+    public bool IsLocked(string? login, string? address) => _store.RateLimitCount(Key(login, address), _window, _time.GetUtcNow()) >= _maxFailures;
 
-    public void Failed(string? login)
-    {
-        var now = _time.GetUtcNow();
-        _failures.AddOrUpdate(Key(login), _ => (1, now), (_, f) => now - f.Since >= _window ? (1, now) : (f.Failures + 1, f.Since));
-        if (_failures.Count > 10_000) // защита памяти от перебора несуществующих логинов
-            foreach (var (k, v) in _failures)
-                if (now - v.Since >= _window) _failures.TryRemove(k, out _);
-    }
+    public void Failed(string? login, string? address) => _store.RateLimitHit(Key(login, address), _window, _time.GetUtcNow());
 
-    public void Succeeded(string? login) => _failures.TryRemove(Key(login), out _);
+    public void Succeeded(string? login, string? address) => _store.RateLimitReset(Key(login, address));
 }
 
 /// <summary>
 /// Ограничение самостоятельной регистрации: не больше MaxRegistrationsPerHour попыток в час с одного адреса
-/// (защита от массового создания учётных записей и перебора занятых логинов). Счётчик хранится в памяти экземпляра API.
+/// (защита от массового создания учётных записей и перебора занятых логинов). Счётчик хранится в PostgreSQL.
 /// </summary>
 public class RegistrationThrottle
 {
     private static readonly TimeSpan Window = TimeSpan.FromHours(1);
+    private readonly Store _store;
     private readonly int _max;
     private readonly TimeProvider _time;
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (int Count, DateTimeOffset Since)> _attempts = new();
 
-    public RegistrationThrottle(IConfiguration cfg, TimeProvider? time = null)
+    public RegistrationThrottle(Store store, IConfiguration cfg, TimeProvider? time = null)
     {
+        _store = store;
         _max = Math.Max(1, cfg.GetValue("Security:MaxRegistrationsPerHour", 20));
         _time = time ?? TimeProvider.System;
     }
 
     /// <summary>Учитывает попытку и возвращает false, если лимит для адреса уже исчерпан.</summary>
-    public bool TryAcquire(string? address)
-    {
-        var now = _time.GetUtcNow();
-        var v = _attempts.AddOrUpdate(address ?? "", _ => (1, now), (_, f) => now - f.Since >= Window ? (1, now) : (f.Count + 1, f.Since));
-        if (_attempts.Count > 10_000)
-            foreach (var (k, x) in _attempts)
-                if (now - x.Since >= Window) _attempts.TryRemove(k, out _);
-        return v.Count <= _max;
-    }
+    public bool TryAcquire(string? address) => _store.RateLimitHit("register:" + (address ?? "-"), Window, _time.GetUtcNow()) <= _max;
 }

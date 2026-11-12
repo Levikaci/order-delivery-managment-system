@@ -116,13 +116,14 @@ api.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 // --- вход ---
 api.MapPost("/auth/login", (HttpContext h, Store s, AuthService a, LoginThrottle t, LoginRequest r) =>
 {
-    if (t.IsLocked(r?.Login)) return Err("TOO_MANY_ATTEMPTS");
+    var ip = h.Connection.RemoteIpAddress?.ToString();
+    if (t.IsLocked(r?.Login, ip)) return Err("TOO_MANY_ATTEMPTS");
     if (s.Authenticate(r?.Login, r?.Password) is not { } me)
     {
-        t.Failed(r?.Login);
+        t.Failed(r?.Login, ip);
         return Err("INVALID_CREDENTIALS");
     }
-    t.Succeeded(r?.Login);
+    t.Succeeded(r?.Login, ip);
     return Results.Ok(new { token = a.Start(me), role = me.Role, refId = me.RefId, name = me.Name });
 });
 // Регистрация клиента без участия оператора; курьеров и операторов по-прежнему создаёт только оператор.

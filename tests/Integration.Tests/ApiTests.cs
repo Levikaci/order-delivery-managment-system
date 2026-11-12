@@ -14,15 +14,36 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     public TestDb Db { get; }
     private readonly bool _ownsDb;
     private readonly IReadOnlyDictionary<string, string> _settings;
-    public ApiFactory(TestDb? db = null, IReadOnlyDictionary<string, string>? settings = null)
+    private readonly string? _remoteIp;
+    /// <param name="remoteIp">Адрес, с которого «приходят» запросы тестового сервера (по умолчанию адреса нет).</param>
+    public ApiFactory(TestDb? db = null, IReadOnlyDictionary<string, string>? settings = null, string? remoteIp = null)
     {
-        _ownsDb = db is null; Db = db ?? new TestDb(); _settings = settings ?? new Dictionary<string, string>();
+        _ownsDb = db is null; Db = db ?? new TestDb(); _settings = settings ?? new Dictionary<string, string>(); _remoteIp = remoteIp;
+    }
+
+    /// <summary>Новый экземпляр API на той же базе — как перезапуск сервера.</summary>
+    public ApiFactory Restart() => new(Db, _settings, _remoteIp);
+
+    /// <summary>Экземпляр API на той же базе с дополнительными настройками.</summary>
+    public ApiFactory WithSettings(Dictionary<string, string> settings, string? remoteIp = null) =>
+        new(Db, _settings.Concat(settings).GroupBy(x => x.Key).ToDictionary(g => g.Key, g => g.Last().Value), remoteIp ?? _remoteIp);
+
+    private sealed class RemoteIpFilter(string ip) : Microsoft.AspNetCore.Hosting.IStartupFilter
+    {
+        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+        {
+            app.Use(next2 => ctx => { ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse(ip); return next2(ctx); });
+            next(app);
+        };
     }
     protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder b)
     {
         b.UseSetting("ConnectionStrings:Default", Db.ConnectionString).UseSetting("Logging:LogLevel:Default", "Warning")
          .UseSetting("Assignment:Enabled", "false"); // фоновое назначение проверяется отдельными тестами, здесь оно мешало бы сценариям
         foreach (var (k, v) in _settings) b.UseSetting(k, v);
+        if (_remoteIp is { } ip)
+            b.ConfigureServices(s => Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions
+                .AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(s, new RemoteIpFilter(ip)));
     }
     protected override void Dispose(bool disposing) { base.Dispose(disposing); if (_ownsDb && disposing) Db.Dispose(); }
 }

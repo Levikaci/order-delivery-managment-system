@@ -10,6 +10,7 @@ namespace Integration.Tests;
 /// <summary>Учётные записи: стойкие пароли новых пользователей, отзыв сессий, ограничение подбора пароля.</summary>
 public class AccountSecurityTests : ApiTests
 {
+    private ApiHost.Store Store => (ApiHost.Store)F.Services.GetService(typeof(ApiHost.Store))!;
     private static string TokenOf(HttpClient c) => c.DefaultRequestHeaders.Authorization!.Parameter!;
 
     [Fact]
@@ -115,11 +116,28 @@ public class AccountSecurityTests : ApiTests
         var clock = new Clock();
         var cfg = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             { ["Security:MaxLoginFailures"] = "3", ["Security:LoginLockoutSeconds"] = "60" }).Build();
-        var t = new LoginThrottle(cfg, clock);
-        for (var i = 0; i < 3; i++) t.Failed("ivan");
-        Assert.True(t.IsLocked("ivan"));
-        Assert.False(t.IsLocked("maria"));
+        var t = new LoginThrottle(Store, cfg, clock);
+        for (var i = 0; i < 3; i++) t.Failed("ivan", "10.0.0.1");
+        Assert.True(t.IsLocked("ivan", "10.0.0.1"));
+        Assert.True(t.IsLocked("IVAN", "10.0.0.1"));                 // логин без учёта регистра
+        Assert.False(t.IsLocked("maria", "10.0.0.1"));
+        Assert.False(t.IsLocked("ivan", "10.0.0.2"));                // с другого адреса чужой логин не заблокирован
         clock.Now += TimeSpan.FromSeconds(61);
-        Assert.False(t.IsLocked("ivan"));
+        Assert.False(t.IsLocked("ivan", "10.0.0.1"));
+        t.Failed("ivan", "10.0.0.1");                                 // после окна отсчёт начинается заново
+        Assert.False(t.IsLocked("ivan", "10.0.0.1"));
     }
+
+    [Fact]
+    public async Task LoginLock_SurvivesApiRestart()
+    {
+        var anon = F.CreateClient();
+        for (var i = 0; i < 5; i++) await anon.PostAsync("/api/auth/login", Json("""{"login":"ivan","password":"guess"}"""));
+        Assert.Equal(5, F.Db.Scalar<int>("SELECT hits FROM rate_limits WHERE key LIKE 'login:ivan|%'"));
+
+        using var restarted = F.Restart();                            // новый экземпляр API на той же базе
+        var r = await restarted.CreateClient().PostAsync("/api/auth/login", Json("""{"login":"ivan","password":"ivan"}"""));
+        Assert.Equal((HttpStatusCode)429, r.StatusCode);
+    }
+
 }

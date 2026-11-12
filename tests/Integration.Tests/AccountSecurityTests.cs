@@ -36,6 +36,17 @@ public class AccountSecurityTests : ApiTests
     }
 
     [Fact]
+    public async Task RenamedCustomer_SessionShowsCurrentName()
+    {
+        var op = await LoginAsync("operator");
+        var created = await Body(await op.PostAsync("/api/customers", Json("""{"name":"Старое Имя","login":"rename1","password":"Rename-pass-58"}""")));
+        var client = await LoginAsync("rename1", "Rename-pass-58");
+        Assert.Equal(HttpStatusCode.OK, (await op.PutAsync($"/api/customers/{created["id"]}", Json("""{"name":"Новое Имя"}"""))).StatusCode);
+        var me = await Body(await client.GetAsync("/api/auth/me"));
+        Assert.Equal("Новое Имя", me["name"]!.ToString());                    // имя не «застывает» на момент входа
+    }
+
+    [Fact]
     public async Task GeneratedPassword_IsLongEnough_AndWorks()
     {
         var op = await LoginAsync("operator");

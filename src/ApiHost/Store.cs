@@ -170,8 +170,11 @@ public class Store : IDisposable
     public Session? LoadSession(byte[] tokenHash)
     {
         using var c = Open();
-        // роль и связь берутся из users: сессия удалённой учётной записи недействительна, смена роли применяется сразу
-        using var r = Cmd(c, @"SELECT u.role,u.ref_id,s.name,s.user_id FROM sessions s JOIN users u ON u.id=s.user_id
+        // роль и связь берутся из users: сессия удалённой учётной записи недействительна, смена роли применяется сразу;
+        // имя — текущее из карточки клиента или курьера, а не сохранённое при входе
+        using var r = Cmd(c, @"SELECT u.role,u.ref_id,COALESCE(cu.name,co.name,s.name),s.user_id FROM sessions s JOIN users u ON u.id=s.user_id
+                               LEFT JOIN customers cu ON u.role='client' AND cu.id=u.ref_id
+                               LEFT JOIN couriers co ON u.role='courier' AND co.id=u.ref_id
                                WHERE s.token_hash=@h AND s.expires_at > now()", ("h", tokenHash)).ExecuteReader();
         return r.Read() ? new Session(r.GetString(0), GuidN(r, 1), r.GetString(2), GuidN(r, 3)) : null;
     }

@@ -810,21 +810,38 @@ public class Store : IDisposable
     public PendingAssignmentResult AssignPendingDeliveries(int batchSize, CancellationToken ct = default)
     {
         var assigned = 0;
+        // доставки, которые в этом проходе назначить не удалось из-за ошибки данных: они не должны
+        // каждый раз оказываться «самыми старыми» и останавливать назначение остальных
+        var skipped = new List<Guid>();
+        PostgresException? lastError = null;
         for (var i = 0; i < batchSize && !ct.IsCancellationRequested; i++)
         {
             Guid deliveryId, courierId;
             using (var c = Open())
             using (var tx = c.BeginTransaction())
             {
-                if (Cmd(c, @"SELECT id FROM deliveries WHERE status='Created' AND courier_id IS NULL
-                             ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT 1").ExecuteScalar() is not Guid id)
-                    return new(assigned, false);
-                var d = Deliveries(c, deliveryId: id).First();
-                var (cid, e) = AssignLocked(c, d, null, null, "повторное автоназначение");
+                if (Cmd(c, @"SELECT id FROM deliveries WHERE status='Created' AND courier_id IS NULL AND NOT (id = ANY(@skip))
+                             ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT 1", ("skip", skipped.ToArray())).ExecuteScalar() is not Guid id)
+                    return Done();
+                Guid? cid; string? e;
+                try
+                {
+                    var d = Deliveries(c, deliveryId: id).First();
+                    (cid, e) = AssignLocked(c, d, null, null, "повторное автоназначение");
+                }
+                catch (PostgresException ex) when (!IsTransient(ex))
+                {
+                    // ошибка конкретной доставки (ограничение, триггер): пропускаем её, остальные назначаем дальше
+                    _log.LogError(ex, "Фоновое назначение: доставка {DeliveryId} пропущена из-за ошибки БД", id);
+                    skipped.Add(id);
+                    lastError = ex;
+                    continue;
+                }
                 if (e is "COURIER_NOT_AVAILABLE" or "COURIER_BUSY") return new(assigned, true);
                 if (e is not null)
                 {
                     _log.LogWarning("Фоновое назначение: доставка {DeliveryId} пропущена ({ErrorCode})", id, e);
+                    skipped.Add(id);
                     continue;
                 }
                 tx.Commit();
@@ -833,7 +850,16 @@ public class Store : IDisposable
             assigned++;
             _log.LogInformation("Фоновое назначение: доставка {DeliveryId} → курьер {CourierId}", deliveryId, courierId);
         }
-        return new(assigned, false);
+        return Done();
+
+        // ни одна доставка не назначена, и были ошибки БД — сбой общий (например, таблицы курьеров):
+        // пробрасываем его, чтобы фоновая служба увеличила паузу между попытками
+        PendingAssignmentResult Done()
+        {
+            if (assigned == 0 && lastError is not null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(lastError);
+            return new(assigned, false);
+        }
     }
 
     private static void SetOrderStatus(NpgsqlConnection c, Guid orderId, OrderStatus from, OrderStatus to, string? comment, Session? actor = null)

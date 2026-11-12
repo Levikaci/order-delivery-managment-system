@@ -56,6 +56,26 @@ CREATE TRIGGER trap BEFORE UPDATE ON {table} FOR EACH ROW EXECUTE FUNCTION boom(
     }
 
     [Fact]
+    public void BrokenDelivery_DoesNotBlockOthers()
+    {
+        AllCouriers(CourierState.Offline);
+        var broken = NewOrder();                                                  // самая старая ожидающая доставка
+        var ok = NewOrder();
+        _db.Sql($@"
+CREATE OR REPLACE FUNCTION boom() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'injected failure'; END $$ LANGUAGE plpgsql;
+CREATE TRIGGER trap BEFORE UPDATE ON deliveries FOR EACH ROW WHEN (OLD.id = '{broken.DeliveryId}') EXECUTE FUNCTION boom();");
+        AllCouriers(CourierState.Available);
+
+        Assert.Equal(1, _s.AssignPendingDeliveries(10).Assigned);                 // ошибка одной доставки не останавливает очередь
+        Assert.Equal(DeliveryStatus.Assigned, _s.Delivery(ok.DeliveryId)!.Status);
+        Assert.Equal(DeliveryStatus.Created, _s.Delivery(broken.DeliveryId)!.Status);
+
+        Untrap("deliveries");
+        Assert.Equal(1, _s.AssignPendingDeliveries(10).Assigned);
+        Assert.Equal(DeliveryStatus.Assigned, _s.Delivery(broken.DeliveryId)!.Status);
+    }
+
+    [Fact]
     public void NoFreeCouriers_DeliveryWaits_ThenCourierAppears()
     {
         AllCouriers(CourierState.Offline);

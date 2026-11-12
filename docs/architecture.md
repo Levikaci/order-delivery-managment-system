@@ -31,7 +31,7 @@
 - **Деньги** — целые копейки (`bigint`), наружу рубли (`decimal`).
 - **Статусы:** заказ выводится из доставки; `Failed → DeliveryFailed`, `Cancelled → Cancelled`.
 
-### Схема БД (миграции 0001–0006)
+### Схема БД (миграции 0001–0007)
 
 ```text
 customers(id, name, phone)                      customer_addresses(id, customer_id, label, city, street, house, apartment)
@@ -42,12 +42,13 @@ deliveries(id, order_id, courier_id, status, created_at, started_at, finished_at
 status_history(id, delivery_id, status, at, comment, actor_id)   order_history(id, order_id, status, at, comment, actor_id)
 order_changes(id, order_id, at, actor_id, actor_name, field, old_value, new_value)
 sessions(token_hash, user_id, role, ref_id, name, expires_at)
+rate_limits(key, hits, window_start)
 schema_migrations(version, name, applied_at)
 ```
 
-Миграция 0005 добавляет `orders.request_hash` — отпечаток запроса создания заказа для проверки повторов `requestId`. Миграция 0006 добавляет индекс очереди `ix_deliveries_pending` (доставки `Created` без курьера) и уникальный индекс `ux_deliveries_active_courier` (не больше одной активной доставки у курьера).
+Миграция 0005 добавляет `orders.request_hash` — отпечаток запроса создания заказа для проверки повторов `requestId`. Миграция 0006 добавляет индекс очереди `ix_deliveries_pending` (доставки `Created` без курьера) и уникальный индекс `ux_deliveries_active_courier` (не больше одной активной доставки у курьера); если у курьера уже несколько активных доставок, перед созданием индекса лишние возвращаются в очередь назначения. Миграция 0007 добавляет `rate_limits` — счётчики неудачных входов (ключ «логин + адрес») и попыток регистрации (ключ — адрес).
 
-Диаграмма схемы (PostgreSQL, миграции 0001–0004; 0005–0006 добавляют только столбец и индексы):
+Диаграмма схемы (PostgreSQL, миграции 0001–0007):
 
 ![Схема БД](img/db-schema.png)
 

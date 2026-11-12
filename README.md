@@ -38,7 +38,7 @@
 - `src/ApiHost` — ASP.NET Core 9 minimal API, хранилище на PostgreSQL (`Store.cs`), миграции схемы (`Db/`), авторизация (`Auth.cs`), проверка конфигурации при запуске (`StartupChecks.cs`), фоновое назначение курьеров (`AssignmentRetryService.cs`).
 - `src/Contracts` — DTO и перечисления; `OrderModule`, `DeliveryModule`, `CourierModule`, `CustomerModule` — бизнес-правила каждого модуля (`*Rules.cs`), общение через контракты.
 - `src/WpfClient` — клиентское приложение WPF (вход, регистрация клиента, рабочие места по ролям).
-- `tests/` — 258 тестов (правила модулей, сценарии, миграции, идемпотентность, фоновое назначение, регистрация, конфигурация, HTTP-API и роли на реальном PostgreSQL).
+- `tests/` — 277 тестов (правила модулей, сценарии, миграции, идемпотентность, фоновое назначение, регистрация, ограничение попыток, проверка ввода, конфигурация, HTTP-API и роли на реальном PostgreSQL).
 - `docs/` — этапы курсового, ADR, архитектура, тесты.
 
 ![Архитектура](docs/img/architecture.png)
@@ -48,7 +48,7 @@ PostgreSQL 16. Строка подключения — `ConnectionStrings:Defaul
 
 ![Схема БД (PostgreSQL)](docs/img/db-schema.png)
 
-Текстовое описание схемы — в [docs/architecture.md](docs/architecture.md#схема-бд-миграции-00010006) (диаграмма показывает таблицы миграций 0001–0004; 0005 добавляет `orders.request_hash`, 0006 — индексы очереди назначения и активных доставок курьера). Основные таблицы: `customers`, `customer_addresses`, `couriers`, `users` (пароли PBKDF2), `products` (`price_kopecks`), `orders`, `order_items`, `deliveries`, `status_history`, `order_history`, `order_changes`, `sessions`, `schema_migrations`.
+Текстовое описание схемы — в [docs/architecture.md](docs/architecture.md#схема-бд-миграции-00010007): 0005 добавляет `orders.request_hash`, 0006 — индексы очереди назначения и активных доставок курьера, 0007 — таблицу счётчиков попыток `rate_limits`. Основные таблицы: `customers`, `customer_addresses`, `couriers`, `users` (пароли PBKDF2), `products` (`price_kopecks`), `orders`, `order_items`, `deliveries`, `status_history`, `order_history`, `order_changes`, `sessions`, `rate_limits`, `schema_migrations`.
 
 ### Обновление версии
 Новая версия приложения при старте сама применяет недостающие миграции; уже применённые не повторяются, данные сохраняются. Перед обновлением рабочей базы сделайте резервную копию:
@@ -145,7 +145,9 @@ docker compose up --build
 
 ### Безопасность учётных записей
 - Пароли хранятся как PBKDF2-SHA256 (100 000 итераций), токены сессий — как SHA-256.
-- После 5 неудачных попыток входа под одним логином вход блокируется на 5 минут (`429 TOO_MANY_ATTEMPTS`; `Security:MaxLoginFailures`, `Security:LoginLockoutSeconds`).
+- После 5 неудачных попыток входа под одним логином с одного адреса вход под этим логином с этого адреса блокируется на 5 минут (`429 TOO_MANY_ATTEMPTS`; `Security:MaxLoginFailures`, `Security:LoginLockoutSeconds`). Владелец учётной записи с другого адреса по-прежнему может войти. Счётчики попыток входа и регистрации хранятся в PostgreSQL (таблица `rate_limits`): они общие для всех экземпляров API и не сбрасываются перезапуском.
+- Если перед API стоит обратный прокси (nginx и т. п.), укажите его адрес в `ForwardedHeaders:KnownProxies` или подсеть в `ForwardedHeaders:KnownNetworks` (в `docker-compose.prod.yml` — `TRUSTED_PROXIES`, `TRUSTED_NETWORKS`): тогда адрес клиента берётся из `X-Forwarded-For`. От остальных источников заголовок не учитывается, поэтому подделать адрес нельзя.
+- Входные данные проверяются: логин (в том числе заданный оператором) — по правилам регистрации, телефон — до 32 символов (`INVALID_PHONE`), имя — до 100, части адреса — до 100, квартира — до 20, комментарий и причина неудачи — до 500 символов (`INVALID_COMMENT`). Числовые значения статусов (например, `99`) отклоняются с `400 INVALID_REQUEST`.
 - Пароль новой учётной записи — не короче 8 символов и не равен логину; если оператор его не задал, генерируется случайный из 12 символов (при самостоятельной регистрации пароль обязателен).
 - Сессия живёт 12 часов; при смене пароля остальные сессии пользователя завершаются. Если сессия закончилась, WPF-клиент сообщает об этом и возвращает к окну входа.
 - При удалении клиента или курьера его сессии сразу становятся недействительными.
@@ -197,7 +199,7 @@ dotnet test OrderDeliveryManagementSystem.sln
 
 | Метод | Endpoint | Что делает |
 |---|---|---|
-| POST | `/api/auth/login`, `/api/auth/logout` | вход / выход (сессии хранятся в PostgreSQL и переживают перезапуск, 12 часов); после 5 неудачных попыток — `429 TOO_MANY_ATTEMPTS` |
+| POST | `/api/auth/login`, `/api/auth/logout` | вход / выход (сессии хранятся в PostgreSQL и переживают перезапуск, 12 часов); после 5 неудачных попыток с одного адреса — `429 TOO_MANY_ATTEMPTS` |
 | POST | `/api/auth/register` | регистрация клиента (`name`, `phone`, `login`, `password`), сразу возвращает токен; `409 LOGIN_TAKEN`, `400 INVALID_LOGIN` / `WEAK_PASSWORD`, `403 REGISTRATION_DISABLED`, `429 TOO_MANY_REGISTRATIONS` |
 | POST | `/api/auth/password` | смена своего пароля (`oldPassword`, `newPassword` ≥ 8 символов); остальные сессии пользователя завершаются |
 | GET | `/api/auth/me`, `/api/state` | текущий пользователь; данные для UI (фильтруются по роли) |

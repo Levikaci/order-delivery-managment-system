@@ -31,12 +31,12 @@
 - **Деньги** — целые копейки (`bigint`), наружу рубли (`decimal`).
 - **Статусы:** заказ выводится из доставки; `Failed → DeliveryFailed`, `Cancelled → Cancelled`.
 
-### Схема БД (миграции 0001–0004)
+### Схема БД (миграции 0001–0006)
 
 ```text
 customers(id, name, phone)                      customer_addresses(id, customer_id, label, city, street, house, apartment)
 couriers(id, name, phone, state)                products(id, name, price_kopecks)
-users(id, login, salt, hash, role, ref_id)      orders(id, customer_id, address, comment, status, created_at, request_id)
+users(id, login, salt, hash, role, ref_id)      orders(id, customer_id, address, comment, status, created_at, request_id, request_hash)
 order_items(id, order_id, product_id, name, price_kopecks, quantity)
 deliveries(id, order_id, courier_id, status, created_at, started_at, finished_at, failure_reason, confirmed_at)
 status_history(id, delivery_id, status, at, comment, actor_id)   order_history(id, order_id, status, at, comment, actor_id)
@@ -45,7 +45,9 @@ sessions(token_hash, user_id, role, ref_id, name, expires_at)
 schema_migrations(version, name, applied_at)
 ```
 
-Диаграмма схемы (PostgreSQL, миграции 0001–0004):
+Миграция 0005 добавляет `orders.request_hash` — отпечаток запроса создания заказа для проверки повторов `requestId`. Миграция 0006 добавляет индекс очереди `ix_deliveries_pending` (доставки `Created` без курьера) и уникальный индекс `ux_deliveries_active_courier` (не больше одной активной доставки у курьера).
+
+Диаграмма схемы (PostgreSQL, миграции 0001–0004; 0005–0006 добавляют только столбец и индексы):
 
 ![Схема БД](img/db-schema.png)
 
@@ -56,3 +58,19 @@ schema_migrations(version, name, applied_at)
 3. `dotnet run --project tools/SqliteImport -- data/delivery.db "Host=localhost;Port=5432;Database=delivery;Username=delivery;Password=delivery"`.
    Перенос идёт одной транзакцией, исходный файл не меняется. Цены переводятся в копейки, заказы с неудачной доставкой получают статус `DeliveryFailed`, пароли сохраняются.
 4. Запустите приложение с `ConnectionStrings__Default`, указывающей на эту БД.
+
+## Изменения v2.2.0 (issue #9)
+
+Решения — [ADR-008](decisions/ADR-008-deployment-idempotency-assignment-recovery.md).
+
+- **Окружения.** `StartupChecks` при запуске вне Development запрещает стандартные пароли, отсутствие строки подключения и демо-данные. Локальный запуск — `appsettings.Development.json` и `docker-compose.yml` (порты на `127.0.0.1`), сервер — `docker-compose.prod.yml` (PostgreSQL только во внутренней сети).
+- **Идемпотентность.** `CreateOrderRequest.Fingerprint()` — SHA-256 нормализованных значимых полей; хранится в `orders.request_hash`. Повтор `requestId` с другим отпечатком — `409 IDEMPOTENCY_CONFLICT`.
+- **Фоновое назначение.** `AssignmentRetryService` (`BackgroundService`) периодически вызывает `Store.AssignPendingDeliveries`: по одной доставке в транзакции, `FOR UPDATE SKIP LOCKED` для доставки и курьера, тот же алгоритм балансировки, что и при создании заказа. При сбоях БД пауза растёт экспоненциально. Несколько экземпляров API и ручное назначение не конфликтуют.
+
+```text
+POST /api/orders ──► транзакция: заказ + доставка (Created) ──► попытка назначить курьера
+                                                                   │ нет курьера / сбой БД
+                                                                   ▼
+AssignmentRetryService ── каждые N секунд ──► SELECT … status='Created' AND courier_id IS NULL
+                                              FOR UPDATE SKIP LOCKED ──► Assigned + история
+```

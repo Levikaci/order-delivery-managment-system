@@ -56,6 +56,16 @@
 }
 ```
 
+Необязательное поле `requestId` (GUID) — ключ идемпотентности в рамках клиента:
+
+| Повтор с тем же `requestId` | Ответ |
+|---|---|
+| те же данные (товары и количество, адрес, комментарий, `saveAddress`) | `200`, уже созданный заказ, второй не создаётся |
+| другие данные | `409` `{ "success": false, "errorCode": "IDEMPOTENCY_CONFLICT", ... }` |
+| другой клиент | независимый заказ |
+
+Порядок позиций, разбиение одного товара на несколько строк и пробелы по краям строк не считаются изменением. Для каждого нового заказа клиент генерирует новый `requestId`; при обрыве связи повторяет запрос с прежним.
+
 ## CreateOrderResponse
 
 ```json
@@ -156,12 +166,13 @@ DeliveryDto
 
 | Что | Описание |
 |---|---|
-| `POST /api/orders` | Необязательное поле `requestId` (GUID): повторный запрос с тем же ключом возвращает уже созданный заказ. Ответ дополнен `orderStatus`, `courierId`, `courierAssigned`, `message` |
+| `POST /api/orders` | Необязательное поле `requestId` (GUID): повторный запрос с тем же ключом и теми же данными возвращает уже созданный заказ, с другими данными — `409 IDEMPOTENCY_CONFLICT` (v2.2.0). Ответ дополнен `orderStatus`, `courierId`, `courierAssigned`, `message`. Если `courierAssigned=false`, курьер будет назначен фоновой службой автоматически |
 | `PUT /api/orders/{id}` | `comment`: не передан — не менять, `""` — очистить |
 | `GET /api/orders/{id}/changes` | Журнал изменений заказа (оператор и владелец-клиент) |
 | Заказ / доставка | В ответ добавлены `orderStatus`, `changes[]` (`at`, `actorId`, `actorName`, `field` = `Items`/`Address`/`Comment`, `oldValue`, `newValue`); записи истории содержат `actorId` |
 | `OrderStatus` | Новое значение `DeliveryFailed` (ADR-006) |
-| Ошибки | `STORAGE_ERROR` (500, сбой хранилища), `INTERNAL_ERROR` (500), `INVALID_REQUEST` (400, некорректный JSON) в том же формате `{success, errorCode, error, message}` |
+| Ошибки | `STORAGE_ERROR` (500, сбой хранилища, в том числе недоступность БД по сети), `INTERNAL_ERROR` (500), `INVALID_REQUEST` (400, некорректный JSON), `IDEMPOTENCY_CONFLICT` (409), `TOO_MANY_ATTEMPTS` (429, вход временно заблокирован), `WEAK_PASSWORD` (400, также при создании клиента/курьера со слабым паролем) в том же формате `{success, errorCode, error, message}` |
+| Назначение курьера | Доставки `Created` без курьера назначаются фоновой службой (`AssignmentRetryService`); ручное `POST /api/deliveries/{id}/assign` работает как прежде. Повторное назначение уже назначенной доставки — `409 DELIVERY_ALREADY_ASSIGNED`; курьер с активной доставкой — `409 COURIER_BUSY` |
 | Внутренний интерфейс | `IDeliveryService` / `CreateDeliveryRequest` из «Протокола 1» **удалены**: создание доставки — `Store.CreateDelivery` и `POST /api/deliveries`; повтор по `orderId` идемпотентен (`DELIVERY_ALREADY_EXISTS`, 409) |
 
 Цены в API — `decimal` в рублях; хранятся в копейках (ADR-005).

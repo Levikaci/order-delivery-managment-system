@@ -25,9 +25,11 @@
 | Деньги | `bigint` в копейках, `OrderModule.Money` ([ADR-005](decisions/ADR-005-money-in-kopecks.md)) | `MoneyTests`, `Money_RoundTripsExactly_OverHttp` |
 | Хранение данных | PostgreSQL, версионированные миграции ([ADR-004](decisions/ADR-004-postgresql-and-migrations.md)) | `MigrationTests`, `Store_Restart_KeepsData*`, `DataSurvivesApplicationRestart` |
 | Обновление существующей установки | `tools/SqliteImport` | `SqliteImportTests` |
-| Идемпотентность и устойчивость к сбоям | `requestId`, транзакции, `FOR UPDATE` | `ReliabilityTests`, `PostOrders_WithSameRequestId_IsIdempotent` |
-| Запуск | `docker compose up --build` или `dotnet run` | CI (`.github/workflows/ci.yml`) |
-| Тесты | 171 автоматический тест | `dotnet test OrderDeliveryManagementSystem.sln` |
+| Идемпотентность и устойчивость к сбоям | `requestId` с отпечатком запроса (`409 IDEMPOTENCY_CONFLICT`), транзакции, `FOR UPDATE` | `ReliabilityTests`, `IdempotencyTests`, `PostOrders_WithSameRequestId_IsIdempotent` |
+| Назначение после сбоя (сценарий 2) | фоновое назначение `AssignmentRetryService`, `FOR UPDATE SKIP LOCKED` ([ADR-008](decisions/ADR-008-deployment-idempotency-assignment-recovery.md)) | `AssignmentRecoveryTests`, `AssignmentRetryServiceTests`, `AssignmentRetryApiTests` |
+| Безопасность развёртывания | окружения Development/Production, `StartupChecks`, `docker-compose.prod.yml` | `StartupConfigTests`, `AccountSecurityTests` |
+| Запуск | `docker compose up --build` (локально), `docker compose -f docker-compose.prod.yml up -d` (сервер) или `dotnet run` | CI (`.github/workflows/ci.yml`) |
+| Тесты | 248 автоматических тестов | `dotnet test OrderDeliveryManagementSystem.sln` |
 
 ## Допустимые отклонения от ТЗ
 
